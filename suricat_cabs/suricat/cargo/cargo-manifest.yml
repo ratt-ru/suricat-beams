@@ -1,6 +1,6 @@
 metadata:
   # name of python package
-  PACKAGE: suricat-beams
+  PACKAGE: suricat-beams-cabs
   # its repository -- leave unset to skip version checks
   ## GITHUB_REPOSITORY: ratt-ru/breifast
   # registry to use. Use module::filename.yml::variable format to pull from a config file inside a python module

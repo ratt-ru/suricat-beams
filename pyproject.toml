@@ -10,7 +10,7 @@ packages = [{include = "suricat"}]
 [tool.poetry.dependencies]
 python = "^3.8"
 stimela = "^2.0"
-suricat-beams-cabs = "^0.0.4"
+suricat-beams-cabs = "*"
 xarray-fits = "*"
 astro-tigger-lsm = "*"
 matplotlib = "*"
