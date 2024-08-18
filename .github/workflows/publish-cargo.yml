@@ -1,0 +1,41 @@
+name: Docker
+
+on:
+  push:
+    branches: [ "master" ]
+    # Publish semver tags as releases.
+    # tags: [ 'v*.*.*' ]
+  pull_request:
+    branches: [ "master" ]
+
+env:
+  DOCKER_USER: ${{ secrets.DOCKER_USER }}
+  DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # This is used to complete the identity challenge
+      # with sigstore/fulcio when running outside of PRs.
+      id-token: write
+
+    steps:
+      - name: Docker login
+        run: docker login quay.io --username $DOCKER_USER --password $DOCKER_PASSWORD
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install package
+        run: pip install -e .        
+
+      - name: Install cult-cargo
+        # replace with normal install when 0.1.4 is out
+        run: pip install git+https://github.com/caracal-pipeline/cult-cargo.git@issue-51
+
+      - name: Run build and push image
+        run: build-cargo -m suricat/cargo/cargo-manifest.yml -a

@@ -3,7 +3,10 @@ lib:
     suricat:
       # common options for breifast cab can set en masse here
       cabs:
-        command: none
+        image:
+          registry: quay.io/osmirnov
+          name: suricat
+          version: master-sc0.0.2
 
 cabs:
   suricat.download-mdv-beams:
