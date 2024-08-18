@@ -33,12 +33,9 @@ jobs:
       - name: Install cabs package
         run: pip install -e suricat_cabs .        
 
-      - name: Install package
-        run: pip install -e .        
-
       - name: Install cult-cargo
         # replace with normal install when 0.1.4 is out
         run: pip install git+https://github.com/caracal-pipeline/cult-cargo.git@issue-51
 
       - name: Run build and push image
-        run: build-cargo -m suricat/cargo/cargo-manifest.yml -a
+        run: build-cargo -m suricat_cabs/cargo/cargo-manifest.yml -a

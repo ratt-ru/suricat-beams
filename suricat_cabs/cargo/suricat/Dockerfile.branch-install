@@ -1,0 +1,9 @@
+FROM {base_python_image}
+
+{pre_install}
+
+RUN {python} -mpip install --no-cache-dir {pip_target}@{branch}
+
+{post_install}
+
+CMD {CMD}
