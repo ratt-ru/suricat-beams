@@ -30,6 +30,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install cabs package
+        run: pip install -e suricat_cabs .        
+
       - name: Install package
         run: pip install -e .        
 
