@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "suricat-beams"
-version = "0.0.4"
+version = "0.0.5"
 description = "MeerKAT primary beam model handling utilities"
 authors = ["Oleg Smirnov <osmirnov@gmail.com>"]
 license = "MIT"
