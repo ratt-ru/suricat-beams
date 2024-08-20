@@ -5,7 +5,7 @@ description = "MeerKAT primary beam model handling utilities"
 authors = ["Oleg Smirnov <osmirnov@gmail.com>"]
 license = "MIT"
 readme = "README.md"
-packages = [{include = "suricat", from = "suricat"}]
+packages = [{include = "suricat", from = "suricat-beams"}]
 
 [tool.poetry.dependencies]
 python = "^3.8"
