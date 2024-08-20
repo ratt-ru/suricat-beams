@@ -38,4 +38,4 @@ jobs:
         run: pip install git+https://github.com/caracal-pipeline/cult-cargo.git@issue-51
 
       - name: Run build and push image
-        run: build-cargo -m suricat_cabs/suricat/cargo/cargo-manifest.yml -a
+        run: build-cargo -m suricat-beams/suricat/cargo/cargo-manifest.yml -a
