@@ -1,0 +1,36 @@
+metadata:
+  # name of python package
+  PACKAGE: suricat-beams-cabs
+  # its repository -- leave unset to skip version checks
+  ## GITHUB_REPOSITORY: ratt-ru/breifast
+  # registry to use. Use module::filename.yml::variable format to pull from a config file inside a python module
+  REGISTRY: quay.io/osmirnov
+  # image bundle version. Use module::filename.yml::variable format to pull from a config file inside a python module
+  BUNDLE_VERSION: sc0.0.4
+  # prefix to be removed from image version when comparing to python package version
+  BUNDLE_VERSION_PREFIX: sc
+  # path to images. Use module::filename to refer to content of module
+  BASE_IMAGE_PATH: suricat::cargo
+
+assign:
+  # standard variables used in templated Docker files
+  pre_install: ''
+  post_install: ''
+  extra_deps: ''
+
+  # base image for generic Python-based packages
+  base_python_image: quay.io/stimela2/python-astro:3.9-cc0.1.3
+  # corresponding python binary
+  python: python3.9
+
+  pip_target: git+https://github.com/ratt-ru/suricat-beams.git
+  
+  # # assign token from GITHUB_TOKEN environment variable (for installing from private repos)
+  # github_token: ENV::RATT_GITHUB_TOKEN
+
+images:
+  suricat:
+    versions:
+      master:
+        branch: master
+        dockerfile: Dockerfile.branch-install

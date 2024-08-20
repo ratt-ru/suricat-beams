@@ -1,0 +1,53 @@
+lib:
+  misc:
+    suricat:
+      # common options for breifast cab can set en masse here
+      cabs:
+        image:
+          registry: quay.io/osmirnov
+          name: suricat
+          version: master-sc0.0.2
+
+cabs:
+  suricat.download-mdv-beams:
+    _use: lib.misc.suricat.cabs
+    info: Downloads MdV-format primary beams from SARAO archive
+    command: suricat.beams.download_mdv_beams
+    flavour: python
+    inputs:
+      source: 
+        dtype: str
+        info: full URL, or filename (e.g. MeerKAT_U_band_primary_beam.npz), or band (e.g. U)
+        required: true
+        policies:
+          positional: true
+    outputs:
+      dest: 
+        dtype: File
+        info: destination file, default uses filename from URL
+        required: false
+        policies:
+          positional: true
+
+  suricat.mdv-beams-to-bds:
+    _use: lib.misc.suricat.cabs
+    command: suricat.beams.mdv_beams_to_bds
+    info: Converts MdV-format primary beams to a beam dataset (BDS)
+    flavour: python
+    inputs:
+      mdv-beams:
+        dtype: File
+        metavar: MDV_FILE
+        info: input MdV beams npz file (see https://doi.org/10.48479/wdb0-h061)
+        required: true
+        policies:
+          positional: true
+    outputs:
+      bds: 
+        dtype: Directory
+        metavar: BDS_FILE 
+        info: output beam dataset (BDS) file
+        mkdir: false
+        policies:
+          positional: true
+
