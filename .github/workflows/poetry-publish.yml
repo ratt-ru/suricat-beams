@@ -25,7 +25,7 @@ jobs:
         run: poetry config pypi-token.pypi ${{secrets.PYPI_TOKEN}}
 
       - name: Publish cabs
-        run: cd suricat_cabs && poetry publish --build
+        run: cd suricat && poetry publish --build
 
       - name: Publish main package
         run: poetry publish --build
