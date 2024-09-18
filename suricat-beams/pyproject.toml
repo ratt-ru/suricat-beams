@@ -1,11 +1,11 @@
 [tool.poetry]
 name = "suricat-beams-cabs"
-version = "0.0.7"
-description = "MeerKAT primary beam model handling utilities -- Stimela cabs"
+version = "0.0.8"
+description = "MeerKAT primary beam model handling utilities -- Stimela cabs and recipes"
 authors = ["Oleg Smirnov <osmirnov@gmail.com>"]
 license = "MIT"
 readme = "README.md"
-packages = [{ include = "suricat/cabs" }]
+packages = [{ include = "suricat/cabs" }, { include = "suricat/recipes" }]
 
 [tool.poetry.dependencies]
 python = "^3.8"
