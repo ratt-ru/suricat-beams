@@ -1,0 +1,50 @@
+#!/usr/bin/env -S stimela run -l
+_include:
+  - (suricat.cabs)suricat.yml
+
+## this augments the standard 'opts' config section to tweak logging settings
+opts:
+  log:
+    dir: logs/log-{config.run.datetime}
+    name: log-{info.fqname}
+    nest: 2
+    symlink: log
+
+suricat-init:
+  info: download and set up MeerKAT primary beam models for use with suricat
+
+  inputs:
+    band:
+      info: primary beam band to use (U, L, etc.)
+      required: true
+
+  outputs:    
+    dir-out: 
+      info: output directory for beam models
+      dtype: Directory
+      default: beam
+
+    mdv-beams: 
+      info: path to MdV-style beam model, will be downloaded
+      default: '{current.dir-out}/mdv-beams-{current.band}.npz'
+
+    bds:
+      info: path to beam dataset file computed from MdV model
+      default: '{current.dir-out}/beam-{current.band}.bds.zarr'
+
+  steps:
+    download:
+      info: downloads MdV beams from SARAO archive
+      cab: suricat.download-mdv-beams
+      params:
+        source: =recipe.band
+        dest: =recipe.mdv-beams
+      skip_if_outputs: exist
+
+    compute:
+      info: converts MdV beams to a beam dataset (BDS) file
+      cab: suricat.mdv-beams-to-bds
+      params:
+        mdv-beams: =steps.download.dest
+        bds: =recipe.bds
+      skip_if_outputs: fresh
