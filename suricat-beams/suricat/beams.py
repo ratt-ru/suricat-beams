@@ -193,7 +193,7 @@ class BeamWizard(object):
     def _get_prefilter(self, var: str, i: Union[str, int], j: Union[str, int]):
         key = var, i ,j
         if key not in self._prefilters:
-            self.log.info(f"computing spline prefilter for {var}[{i},{j}]")
+            self.log.debug(f"computing spline prefilter for {var}[{i},{j}]")
             self._prefilters[key] = spline_filter(self.bds[var].sel(i=i, j=j))
         return self._prefilters[key]
 
