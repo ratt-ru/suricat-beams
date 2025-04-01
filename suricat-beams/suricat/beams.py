@@ -41,9 +41,9 @@ def download_mdv_beams(source: str, dest: Optional[str] = None,
     if "://" in source:
         urls = [source]
     elif source.endswith(".npz"):
-        urls = [f"{url}/{source}" for url in base_url]
+        urls = [f"{url.rstrip('/')}/{source}" for url in base_url]
     elif source in ("L", "U", "S0", "S1", "S2", "S3", "S4"):
-        urls = [f"{url}/MeerKAT_{source}_band_primary_beam.npz" for url in base_url]
+        urls = [f"{url.rstrip('/')}/MeerKAT_{source}_band_primary_beam.npz" for url in base_url]
     else:
         raise RuntimeError(f"unrecognized source argument: {source}")
     
