@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "suricat-beams"
-version = "0.0.9"
+version = "0.1.0"
 description = "MeerKAT primary beam model handling utilities"
 authors = ["Oleg Smirnov <osmirnov@gmail.com>"]
 license = "MIT"
@@ -17,6 +17,7 @@ click = "*"
 astropy = "*"
 numpy = "*"
 scipy = "*"
+wget = "*"
 
 [tool.poetry.scripts]
 suricat = "suricat.main:cli"

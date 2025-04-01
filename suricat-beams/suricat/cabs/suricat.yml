@@ -1,6 +1,7 @@
 lib:
   misc:
     suricat:
+      base-url: https://public-data.ratt.center/MeerKATbeams/
       # common options for breifast cab can set en masse here
       cabs:
         image:
@@ -21,6 +22,16 @@ cabs:
         required: true
         policies:
           positional: true
+        metavar: BAND
+      base-url:
+        info: download locations (mirrors), multiple may be given
+        dtype: List[str]
+        default:
+          - https://ratt-public-data.s3.af-south-1.amazonaws.com/MeerKATbeams/
+          - https://archive-gw-1.kat.ac.za/public/repository/10.48479/wdb0-h061/data/
+        policies:
+          repeat: repeat
+        metavar: URL
     outputs:
       dest: 
         dtype: File
@@ -28,6 +39,7 @@ cabs:
         required: false
         policies:
           positional: true
+        metavar: "[DESTINATION]"
 
   suricat.mdv-beams-to-bds:
     _use: lib.misc.suricat.cabs

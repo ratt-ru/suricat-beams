@@ -1,11 +1,12 @@
-import pickle
 from typing import Any, List, Optional, Union
 from dataclasses import dataclass
 import os.path
+import sys
 import numpy as np
 import numpy.linalg
 import scipy.interpolate
 import wget
+from urllib.error import HTTPError
 from astropy.io import fits
 from astropy.coordinates import SkyCoord, EarthLocation, AltAz
 from astropy.time import Time
@@ -24,7 +25,10 @@ class PowerBeam(object):
     deg: np.ndarray    # coordinates in beam
     freq: np.ndarray   # frequencies
 
-def download_mdv_beams(source: str, dest: Optional[str] = None):
+def download_mdv_beams(source: str, dest: Optional[str] = None,
+                       base_url: List[str] = 
+                        ["https://archive-gw-1.kat.ac.za/public/repository/10.48479/wdb0-h061/data/"],
+                       exit_on_error: Optional[int] = 1):
     """Downloads MdV beams from SARAO archive
 
     Args:
@@ -32,18 +36,38 @@ def download_mdv_beams(source: str, dest: Optional[str] = None):
         dest (Optional[str], optional): destination file, defaults to basename of filename
     """
     from . import log
+    urls = []
     if "://" in source:
-        url = source
+        urls = [source]
     elif source.endswith(".npz"):
-        url = f"https://archive-gw-1.kat.ac.za/public/repository/10.48479/wdb0-h061/data/{source}"
+        urls = [f"{url.rstrip('/')}/{source}" for url in base_url]
     elif source in ("L", "U", "S0", "S1", "S2", "S3", "S4"):
-        url = f"https://archive-gw-1.kat.ac.za/public/repository/10.48479/wdb0-h061/data/MeerKAT_{source}_band_primary_beam.npz"
+        urls = [f"{url.rstrip('/')}/MeerKAT_{source}_band_primary_beam.npz" for url in base_url]
+    else:
+        raise RuntimeError(f"unrecognized source argument: {source}")
+    
+    if not urls:
+        raise RuntimeError(f"no download paths -- did you specify base_url?")
+    
     if dest is None:
-        dest = os.path.basename(url)
+        dest = os.path.basename(urls[0])
 
-    log.info(f"downloading {url} to {dest}")
-    wget.download(url, out=dest)
-    log.info(f"download complete")
+    for url in urls:
+        log.info(f"downloading {url} to {dest}")
+        try:
+            wget.download(url, out=dest)
+            log.info(f"download complete")
+            return 0
+        except HTTPError as exc:
+            log.warning(f"download failed: {exc}")
+
+    # if we got here, all downloads failed
+    log.error(f"all download atempts failed")
+    if exit_on_error is not None:
+        sys.exit(exit_on_error)
+    else:
+        raise RuntimeError(f"all download atempts failed")
+
 
 @cli.command("download", help=schemas.cabs.get("suricat.download-mdv-beams").info)
 @clickify_parameters(schemas.cabs.get("suricat.download-mdv-beams"))

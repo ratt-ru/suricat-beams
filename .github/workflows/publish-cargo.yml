@@ -33,8 +33,12 @@ jobs:
       - name: Install cabs package
         run: pip install -e suricat-beams      
 
+      - name: Install stimela
+        # remove when cult-cargo 0.2.0 is out
+        run: pip install git+https://github.com/caracal-pipeline/stimela.git
+
       - name: Install cult-cargo
-        # replace with normal install when 0.1.4 is out
+        # replace with normal install when 0.2.0 is out
         run: pip install git+https://github.com/caracal-pipeline/cult-cargo.git
 
       - name: Run build and push image

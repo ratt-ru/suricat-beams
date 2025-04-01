@@ -2,6 +2,9 @@ FROM {base_python_image}
 
 {pre_install}
 
+# temporary measure, remove when mirrors branch is merged
+RUN {python} -mpip install --no-cache-dir wget
+
 RUN {python} -mpip install --no-cache-dir {pip_target}@{branch}
 
 {post_install}
