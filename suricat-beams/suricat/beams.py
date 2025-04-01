@@ -14,7 +14,6 @@ from astropy.wcs import WCS
 import astropy.units as u
 from scipy.ndimage import spline_filter, map_coordinates
 import xarray
-import sys
 
 from scabha.schema_utils import clickify_parameters
 from .main import cli, schemas
