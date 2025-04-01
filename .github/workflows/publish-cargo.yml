@@ -30,6 +30,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install wget
+        # remove when mirrors branch is merged
+        run: pip install wget
+
       - name: Install cabs package
         run: pip install -e suricat-beams      
 
