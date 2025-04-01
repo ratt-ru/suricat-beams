@@ -24,7 +24,8 @@ class PowerBeam(object):
     deg: np.ndarray    # coordinates in beam
     freq: np.ndarray   # frequencies
 
-def download_mdv_beams(source: str, dest: Optional[str] = None):
+def download_mdv_beams(source: str, dest: Optional[str] = None,
+                       base_url: str = ""):
     """Downloads MdV beams from SARAO archive
 
     Args:

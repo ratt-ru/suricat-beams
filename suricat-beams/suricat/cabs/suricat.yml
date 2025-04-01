@@ -1,6 +1,7 @@
 lib:
   misc:
     suricat:
+      base-url: https://public-data.ratt.center/MeerKATbeams/
       # common options for breifast cab can set en masse here
       cabs:
         image:
