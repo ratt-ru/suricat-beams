@@ -17,6 +17,7 @@ click = "*"
 astropy = "*"
 numpy = "*"
 scipy = "*"
+wget = "*"
 
 [tool.poetry.scripts]
 suricat = "suricat.main:cli"
