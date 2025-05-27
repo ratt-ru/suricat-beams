@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "suricat-beams"
-version = "0.1.1"
+version = "0.1.2"
 description = "MeerKAT primary beam model handling utilities"
 authors = ["Oleg Smirnov <osmirnov@gmail.com>"]
 license = "MIT"
@@ -11,6 +11,7 @@ packages = [{include = "suricat", from = "suricat-beams"}]
 python = "^3.8"
 stimela = "^2.0"
 xarray-fits = "*"
+zarr = "*"
 astro-tigger-lsm = "*"
 matplotlib = "*"
 click = "*"
