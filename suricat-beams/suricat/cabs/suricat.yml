@@ -7,7 +7,7 @@ lib:
         image:
           registry: quay.io/osmirnov
           name: suricat
-          version: master-sc0.1.2
+          version: sc0.1.2
 
 cabs:
   suricat.download-mdv-beams:

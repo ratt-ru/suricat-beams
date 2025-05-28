@@ -30,7 +30,11 @@ assign:
 
 images:
   suricat:
+    assign:
+      dockerfile: Dockerfile.generic.pip
     versions:
       master:
-        branch: master
-        dockerfile: Dockerfile.branch-install
+        package: git+https://github.com/o-smirnov/suricat-beams.git
+      '0.1.2':
+        package: suricat-beams==0.1.2
+
