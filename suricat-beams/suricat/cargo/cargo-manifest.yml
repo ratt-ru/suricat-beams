@@ -6,7 +6,7 @@ metadata:
   # registry to use. Use module::filename.yml::variable format to pull from a config file inside a python module
   REGISTRY: quay.io/osmirnov
   # image bundle version. Use module::filename.yml::variable format to pull from a config file inside a python module
-  BUNDLE_VERSION: sc0.1.1
+  BUNDLE_VERSION: sc0.1.2
   # prefix to be removed from image version when comparing to python package version
   BUNDLE_VERSION_PREFIX: sc
   # path to images. Use module::filename to refer to content of module
