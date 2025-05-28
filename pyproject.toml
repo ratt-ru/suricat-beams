@@ -11,7 +11,7 @@ packages = [{include = "suricat", from = "suricat-beams"}]
 python = "^3.8"
 stimela = "^2.0"
 xarray-fits = "*"
-zarr = "*"
+zarr = "<3"
 astro-tigger-lsm = "*"
 matplotlib = "*"
 click = "*"
