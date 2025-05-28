@@ -31,9 +31,6 @@ assign:
 images:
   suricat:
     versions:
-      '0.1.2':
-        branch: release-0.1.2
-        dockerfile: Dockerfile.branch-install
       master:
         branch: master
         dockerfile: Dockerfile.branch-install
