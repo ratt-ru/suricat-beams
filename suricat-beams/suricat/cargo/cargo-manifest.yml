@@ -34,7 +34,7 @@ images:
       dockerfile: Dockerfile.generic.pip
     versions:
       master:
-        package: git+https://github.com/o-smirnov/suricat-beams.git
+        package: git+https://github.com/ratt-ru/suricat-beams.git
       '0.1.2':
         package: suricat-beams==0.1.2
 
