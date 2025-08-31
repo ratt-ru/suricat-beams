@@ -14,6 +14,7 @@ from astropy.wcs import WCS
 import astropy.units as u
 from scipy.ndimage import spline_filter, map_coordinates
 import xarray
+from pathlib import Path
 
 from scabha.schema_utils import clickify_parameters
 from .main import cli, schemas
@@ -194,7 +195,7 @@ class BeamWizard(object):
             fitshdr = fits.open(image_name)[0].header
             self.wcs = WCS(fitshdr)
             self.time = None
-        elif image_name.endswith(".zarr") or image_name.endswith(".zarr/"):
+        elif (Path(image_name) / ".zgroup").exists():
             log.info(f"obtaining WCS from dataset {image_name}")
             ds = xarray.open_zarr(image_name)
             fitshdr = fits.Header(dict(ds.attrs['fits_header']))
