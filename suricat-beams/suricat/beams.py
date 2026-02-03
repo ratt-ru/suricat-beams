@@ -210,8 +210,20 @@ class BeamWizard(object):
             self.wcs = self.wcs.dropaxis(len(self.wcs.axis_type_names) - 1)
         self.centre = self.wcs.pixel_to_world(fitshdr['CRPIX1'] - 1, fitshdr['CRPIX2'] - 1)
         log.info(f"image centre is at {self.centre}")
-        # location could be made configurable        
-        self.default_location = EarthLocation.of_site("MeerKAT") 
+
+        # Construct default l/m grid from image pixels
+        nx, ny = fitshdr['NAXIS1'], fitshdr['NAXIS2']
+        crpix1, crpix2 = fitshdr['CRPIX1'], fitshdr['CRPIX2']
+        cdelt1, cdelt2 = fitshdr['CDELT1'], fitshdr['CDELT2']
+        # l/m are offsets from center in degrees (l increases to the east, m to the north)
+        self.l_grid = (np.arange(nx) - (crpix1 - 1)) * cdelt1
+        self.m_grid = (np.arange(ny) - (crpix2 - 1)) * cdelt2
+        log.info(f"default l/m grid: {nx}x{ny} pixels, "
+                 f"l=[{self.l_grid[0]:.4f}, {self.l_grid[-1]:.4f}], "
+                 f"m=[{self.m_grid[0]:.4f}, {self.m_grid[-1]:.4f}] deg")
+
+        # location could be made configurable
+        self.default_location = EarthLocation.of_site("MeerKAT")
         log.info(f"location is MeerKAT ({self.default_location})")
         self._prefilters = {}
 
@@ -222,7 +234,7 @@ class BeamWizard(object):
             self._prefilters[key] = spline_filter(self.bds[var].sel(i=i, j=j))
         return self._prefilters[key]
 
-    def get_source_coodinates(self, srcpos: SkyCoord, 
+    def get_source_coordinates(self, srcpos: SkyCoord, 
                                     times: Optional[Time] = None, 
                                     loc: EarthLocation = None,
                                     signs=(1,1), swap=False):
@@ -260,9 +272,9 @@ class BeamWizard(object):
         coords = np.vstack([fy] + [fx[1:]])  # mesh freq,yx
         return map_coordinates(self._get_prefilter(var, i, j), coords, prefilter=True)
 
-    def get_time_variable_beamgain(self, srcpos: SkyCoord, mjds: List[float], 
+    def get_time_variable_beamgain(self, srcpos: SkyCoord, mjds: List[float],
                                         loc: EarthLocation = None, spi: Optional[float] = None):
-        xpyp = self.get_source_pixel_coodinates(srcpos, mjds, loc)
+        xpyp = self.get_source_coordinates(srcpos, mjds, loc)
         if spi is None:
         # interpolate mean beam
             return map_coordinates(self._prefilter_emean, xpyp, prefilter=True), xpyp
@@ -273,5 +285,168 @@ class BeamWizard(object):
             spectral_weights = (self.freqs/self.freqs[0])**spi
             weights = self.band_weights*spectral_weights
             return (bg_freq*weights[:,np.newaxis]).sum(axis=0) / weights.sum(), xpyp
+
+    def get_rotation_averaged_beam(self, l: Optional[np.ndarray] = None,
+                                   m: Optional[np.ndarray] = None,
+                                   times: Optional[Time] = None,
+                                   loc: EarthLocation = None,
+                                   freq: Optional[np.ndarray] = None,
+                                   num_freq: Optional[int] = None,
+                                   spi: Optional[float] = None,
+                                   ncpu: Optional[int] = None,
+                                   time_stepping: int = 4,
+                                   chunk_size: int = 1024**2,
+                                   var: str = 'nstokes', i: str = "I", j: str = "I"):
+        """
+        Computes the rotationally averaged beam at the given l/m coordinates.
+
+        Given a grid of l/m coordinates (in degrees, relative to field center),
+        computes the average beam value at each position by rotating through
+        the parallactic angles corresponding to the given times.
+
+        Args:
+            l: 1D or 2D array of l coordinates (degrees), or None to use image grid
+            m: 1D or 2D array of m coordinates (degrees), or None to use image grid
+            times: Times to average over (uses stored times if None)
+            loc: Observer location (defaults to MeerKAT)
+            freq: Frequencies to sample (uses all beam frequencies if None)
+            num_freq: Number of linearly spaced frequencies to use. Mutually
+                      exclusive with freq.
+            spi: Spectral index. If given, average over frequency with weights
+                 (freq/freq[0])^spi, returning 2D arrays.
+            ncpu: Number of CPUs for parallel computation. Defaults to number
+                  of physical cores.
+            time_stepping: Use every Nth timeslot (default 4) to reduce computation.
+            chunk_size: Number of spatial pixels to process at once (default 1024^2).
+                        Limits memory usage.
+            var: Beam variable to interpolate ('nstokes', 'stokes', 'njones', 'jones')
+            i, j: Stokes/Jones indices
+
+        Returns:
+            Tuple of (mean_beam, variance_beam), each of shape (NFREQ, NM, NL),
+            or (NM, NL) if single freq or if spi is specified.
+        """
+        import os
+        from concurrent.futures import ThreadPoolExecutor
+
+        if loc is None:
+            loc = self.default_location
+        if times is None:
+            if self.times is None:
+                raise RuntimeError("times must be supplied, since BeamWizard was "
+                                   "constructed without observational time info")
+            times = self.times
+        if time_stepping > 1:
+            times = times[::time_stepping]
+        if freq is not None and num_freq is not None:
+            raise ValueError("freq and num_freq are mutually exclusive")
+        if freq is None:
+            bds_freqs = self.bds.coords['FREQ'].values
+            if num_freq is not None:
+                freq = np.linspace(bds_freqs[0], bds_freqs[-1], num_freq)
+            else:
+                freq = bds_freqs
+        if l is None:
+            l = self.l_grid
+        if m is None:
+            m = self.m_grid
+        if ncpu is None:
+            ncpu = os.cpu_count() // 2 or 1  # physical cores (assume hyperthreading)
+
+        # Create meshgrid if l and m are 1D
+        if l.ndim == 1 and m.ndim == 1:
+            ll, mm = np.meshgrid(l, m, indexing='ij')
+        else:
+            ll, mm = l, m
+
+        shape = ll.shape
+        ll_flat = ll.ravel()
+        mm_flat = mm.ravel()
+
+        # Compute parallactic angles at each time for the field center
+        frame = AltAz(obstime=times, location=loc)
+        altaz_centre = self.centre.transform_to(frame)
+
+        # Get position angle to NCP (north celestial pole) to determine parallactic angle
+        ncp = SkyCoord(ra=0*u.deg, dec=90*u.deg)
+        altaz_ncp = ncp.transform_to(frame)
+        pa = altaz_centre.position_angle(altaz_ncp)
+
+        # Compute spectral weights if averaging over frequency
+        if spi is not None:
+            spectral_weights = (freq / freq[0]) ** spi
+            norm_weights = spectral_weights / spectral_weights.sum()
+
+        n_times = len(times)
+        n_pixels = len(ll_flat)
+        n_chunks = (n_pixels + chunk_size - 1) // chunk_size
+        self.log.info(f"computing rotation-averaged beam over {n_times} times, "
+                      f"PA range {pa.min().deg:.1f} to {pa.max().deg:.1f} deg, "
+                      f"{len(freq)} frequency planes, {n_pixels} pixels in {n_chunks} chunks, "
+                      f"using {ncpu} threads")
+
+        # Precompute the spline filter to ensure it's cached before threading
+        self._get_prefilter(var, i, j)
+
+        # Allocate output arrays
+        out_shape = (n_pixels,) if spi is not None else (len(freq), n_pixels)
+        beam_sum = np.zeros(out_shape)
+        beam_sum_sq = np.zeros(out_shape)
+
+        # Process in spatial chunks to limit memory
+        for chunk_idx in range(n_chunks):
+            chunk_start = chunk_idx * chunk_size
+            chunk_end = min(chunk_start + chunk_size, n_pixels)
+            self.log.info(f"processing chunk {chunk_idx + 1}/{n_chunks} "
+                          f"(pixels {chunk_start}-{chunk_end})")
+            ll_chunk = ll_flat[chunk_start:chunk_end]
+            mm_chunk = mm_flat[chunk_start:chunk_end]
+
+            def process_time(t_idx):
+                pa_t = pa[t_idx].rad
+                # Rotate l/m coordinates by parallactic angle
+                l_rot = ll_chunk * np.cos(pa_t) - mm_chunk * np.sin(pa_t)
+                m_rot = ll_chunk * np.sin(pa_t) + mm_chunk * np.cos(pa_t)
+
+                # Convert to beam pixel coordinates
+                xp = l_rot / self.bds.attrs['dx'] + self.bds.attrs['x0']
+                yp = m_rot / self.bds.attrs['dy'] + self.bds.attrs['y0']
+
+                # Interpolate beam at these coordinates
+                xpyp = np.array([yp, xp])  # beam is indexed as Y, X
+                beam_vals = self.interpolate_beam(xpyp, freq, var=var, i=i, j=j)
+
+                # Average over frequency if spectral index is given
+                if spi is not None:
+                    beam_vals = (beam_vals * norm_weights[:, np.newaxis]).sum(axis=0)
+
+                return beam_vals
+
+            # Accumulate over time for this chunk
+            chunk_sum = np.zeros((chunk_end - chunk_start,) if spi is not None else (len(freq), chunk_end - chunk_start))
+            chunk_sum_sq = np.zeros_like(chunk_sum)
+
+            with ThreadPoolExecutor(max_workers=ncpu) as executor:
+                for beam_vals in executor.map(process_time, range(n_times)):
+                    chunk_sum += beam_vals
+                    chunk_sum_sq += beam_vals ** 2
+
+            # Store chunk results
+            if spi is not None:
+                beam_sum[chunk_start:chunk_end] = chunk_sum
+                beam_sum_sq[chunk_start:chunk_end] = chunk_sum_sq
+            else:
+                beam_sum[:, chunk_start:chunk_end] = chunk_sum
+                beam_sum_sq[:, chunk_start:chunk_end] = chunk_sum_sq
+
+        # Compute mean and variance over time
+        beam_mean = beam_sum / n_times
+        beam_var = beam_sum_sq / n_times - beam_mean ** 2
+
+        # Reshape back to grid
+        if spi is not None or len(freq) == 1:
+            return beam_mean.reshape(shape), beam_var.reshape(shape)
+        else:
+            return beam_mean.reshape((len(freq),) + shape), beam_var.reshape((len(freq),) + shape)
 
 
