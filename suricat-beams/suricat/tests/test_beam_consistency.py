@@ -89,19 +89,13 @@ def test_time_variable_vs_rotation_averaged(beam_wizard,
         tv_var = np.var(time_variable_beam, axis=1)    # shape: (NFREQ,)
 
     # Method 2: Get rotation-averaged beam at source's l/m position
-    # Compute l/m at the middle time (reference time for rotation)
-    beam_wizard.log.info("Computing source l/m coordinates at reference time...")
-    ref_time = times[len(times)//2]
-    ref_frame = AltAz(obstime=ref_time, location=loc)
-    altaz_src = srcpos.transform_to(ref_frame)
-    altaz_centre = beam_wizard.centre.transform_to(ref_frame)
+    # Compute l/m in RA/Dec frame: positive l = positive RA (East), positive m = positive Dec (North)
+    beam_wizard.log.info("Computing source l/m coordinates in RA/Dec frame...")
+    angle = beam_wizard.centre.position_angle(srcpos)  # ICRS position angle (0=North, 90=East)
+    sep = beam_wizard.centre.separation(srcpos)
 
-    angle = altaz_centre.position_angle(altaz_src)
-    sep = altaz_centre.separation(altaz_src)
-
-    # Convert to l/m in image coordinates (degrees offset from center)
-    l_src = sep.deg * np.sin(angle.rad)
-    m_src = sep.deg * np.cos(angle.rad)
+    l_src = sep.deg * np.sin(angle.rad)   # East component
+    m_src = sep.deg * np.cos(angle.rad)   # North component
 
     beam_wizard.log.info(f"Source position: l={l_src:.4f} deg, m={m_src:.4f} deg "
                         f"(angle {angle.deg:.1f} deg, separation {sep.deg:.4f} deg)")

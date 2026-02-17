@@ -351,16 +351,10 @@ class BeamWizard(object):
 
         freq, norm_weights = self._resolve_freqs(freq, num_freq, spi)
 
-        mid_idx = len(times) // 2
-        self.log.debug(f"get_time_variable_beamgain: middle time coordinates")
-        self.log.debug(f"  xpyp=[{xpyp[0,mid_idx]:.2f}, {xpyp[1,mid_idx]:.2f}]")
-
         beam_vals = self.interpolate_beam(
             xpyp, freq,
             var=var, i=i, j=j)
 
-        self.log.debug(f"  beam values at middle: {beam_vals[:, mid_idx]}")
-    
         if spi is not None:
             beam_vals = (beam_vals * norm_weights[:, np.newaxis]).sum(axis=0)
 
@@ -456,11 +450,6 @@ class BeamWizard(object):
         altaz_ncp = ncp.transform_to(frame)
         pa = altaz_centre.position_angle(altaz_ncp)
 
-        # Use middle time as reference for relative rotation
-        # Input l/m coordinates are typically computed at a reference time,
-        # so we rotate relative to that time's PA
-        pa_ref = pa[len(pa) // 2]
-
         n_times = len(times)
         n_pixels = len(ll_flat)
         n_chunks = (n_pixels + chunk_size - 1) // chunk_size
@@ -487,11 +476,15 @@ class BeamWizard(object):
             mm_chunk = mm_flat[chunk_start:chunk_end]
 
             def process_time(t_idx):
-                # Rotate l/m coordinates by parallactic angle relative to reference time
-                # Input l/m are defined at reference time (pa_ref), rotate to current PA
-                delta_pa = (pa[t_idx] - pa_ref).rad
-                l_rot = ll_chunk * np.cos(delta_pa) - mm_chunk * np.sin(delta_pa)
-                m_rot = ll_chunk * np.sin(delta_pa) + mm_chunk * np.cos(delta_pa)
+                # Convert l/m (RA/Dec frame: l=East, m=North) to beam coordinates.
+                # PA = position angle from field centre to NCP in AltAz frame.
+                # Empirically: AltAz_angle = PA - ICRS_angle, so expanding:
+                #   x_beam = sin(PA - alpha) = m*sin(PA) - l*cos(PA)
+                #   y_beam = cos(PA - alpha) = l*sin(PA) + m*cos(PA)
+                # (Note: "right" in the AltAz beam = West = negative l, per astronomical convention)
+                pa_t = pa[t_idx].rad
+                l_rot = mm_chunk * np.sin(pa_t) - ll_chunk * np.cos(pa_t)
+                m_rot = ll_chunk * np.sin(pa_t) + mm_chunk * np.cos(pa_t)
 
                 # Convert to beam pixel coordinates
                 xp = l_rot / self.bds.attrs['dx'] + self.bds.attrs['x0']
