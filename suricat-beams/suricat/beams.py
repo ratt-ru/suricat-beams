@@ -1,4 +1,4 @@
-from typing import Any, List, Optional, Union
+from typing import Any, List, Optional, Union, Tuple
 from dataclasses import dataclass
 import os.path
 import sys
@@ -236,7 +236,7 @@ class BeamWizard(object):
 
     def get_source_coordinates(self, srcpos: SkyCoord, 
                                     times: Optional[Time] = None, 
-                                    loc: EarthLocation = None,
+                                    loc: Optional[EarthLocation] = None,
                                     signs=(1,1), swap=False):
         """
         Given a sky position and a list of times, derives the in-beam coordinates of the source (in beam pixels)
@@ -264,7 +264,7 @@ class BeamWizard(object):
         yp = y / self.bds.attrs['dy']  + self.bds.attrs['y0']
         return np.array([xp, yp]), seps, angles
 
-    def interpolate_beam(self, xpyp: np.array, freq: List[float], var: str = 'nstokes', i="I", j="I"):
+    def interpolate_beam(self, xpyp: np.ndarray, freq: List[float], var: str = 'nstokes', i="I", j="I"):
         # beam is I,J,FREQ,Y,X
         freq = self.freq_to_index(freq)
         fx = np.meshgrid(freq, xpyp[0], indexing='ij')   # mesh freq,x
@@ -272,59 +272,148 @@ class BeamWizard(object):
         coords = np.vstack([fy] + [fx[1:]])  # mesh freq,yx
         return map_coordinates(self._get_prefilter(var, i, j), coords, prefilter=True)
 
-    def get_time_variable_beamgain(self, srcpos: SkyCoord, mjds: List[float],
-                                        loc: EarthLocation = None, spi: Optional[float] = None):
-        xpyp = self.get_source_coordinates(srcpos, mjds, loc)
-        if spi is None:
-        # interpolate mean beam
-            return map_coordinates(self._prefilter_emean, xpyp, prefilter=True), xpyp
+    def _resolve_freqs(self,
+                        freq: Optional[np.ndarray] = None,
+                        num_freq: Optional[int] = None,
+                        spi: Optional[float] = None) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        """
+        Resolve frequency array and compute spectral weights.
+
+        Helper method that determines which frequencies to use and optionally
+        computes spectral weights based on a spectral index.
+
+        Args:
+            freq: Explicit frequency array in Hz. If None, uses beam dataset frequencies.
+            num_freq: Number of linearly spaced frequencies between min and max
+                      beam frequencies. Mutually exclusive with freq.
+            spi: Spectral index for computing frequency weights as (freq/freq[0])^spi.
+                 If None, no weights are computed.
+
+        Returns:
+            Tuple of (frequencies, weights) where:
+                - frequencies: 1D array of frequencies in Hz
+                - weights: 1D array of normalized spectral weights, or None if spi is None
+
+        Raises:
+            ValueError: If both freq and num_freq are specified.
+        """
+        if freq is not None and num_freq is not None:
+            raise ValueError("freq and num_freq are mutually exclusive")
+        if freq is None:
+            bds_freqs = self.bds.coords['FREQ'].values
+            if num_freq is not None:
+                freq = np.linspace(bds_freqs[0], bds_freqs[-1], num_freq)
+            else:
+                freq = bds_freqs
+        if spi is not None:
+            norm_weights = (freq / freq[0]) ** spi
+            norm_weights /= norm_weights.sum()
         else:
-            bg_freq = np.zeros((len(self.freqs), len(mjds)))
-            for i, freq in enumerate(self.freqs):
-                bg_freq[i] = map_coordinates(self._prefilter_eband[i], xpyp, prefilter=True)
-            spectral_weights = (self.freqs/self.freqs[0])**spi
-            weights = self.band_weights*spectral_weights
-            return (bg_freq*weights[:,np.newaxis]).sum(axis=0) / weights.sum(), xpyp
+            norm_weights = None
+        return freq, norm_weights
+
+
+    def get_time_variable_beamgain(self, coord: SkyCoord,
+                                   times: Optional[Time] = None,
+                                   loc: Optional[EarthLocation] = None,
+                                   freq: Optional[np.ndarray] = None,
+                                   num_freq: Optional[int] = None,
+                                   spi: Optional[float] = None,
+                                   var: str = 'nstokes', i: str = "I", j: str = "I") -> np.ndarray:
+        """
+        Compute time-variable beam gain for a source at fixed sky coordinates.
+
+        Given a source position, computes the beam gain at that source as a function
+        of time. As the parallactic angle changes, the source traces a path through
+        the beam, and this method returns the beam value along that path.
+
+        Args:
+            coord: Source sky coordinate (RA/Dec)
+            times: Times to sample. If None, uses times from image/dataset.
+            loc: Observer location. If None, uses MeerKAT.
+            freq: Explicit frequency array in Hz. If None, uses beam dataset frequencies.
+            num_freq: Number of linearly spaced frequencies. Mutually exclusive with freq.
+            spi: Spectral index. If provided, returns frequency-averaged beam gain
+                 weighted by (freq/freq[0])^spi.
+            var: Beam variable to interpolate ('nstokes', 'stokes', 'njones', 'jones')
+            i, j: Stokes or Jones indices (e.g., "I", "Q", 0, 1)
+
+        Returns:
+            Beam gain values as np.ndarray:
+                - If spi is None: shape (NFREQ, NTIME) - beam gain per frequency and time
+                - If spi is not None: shape (NTIME,) - frequency-averaged beam gain per time
+
+        Raises:
+            RuntimeError: If times are not available and not provided.
+            ValueError: If both freq and num_freq are specified.
+        """
+        xpyp, seps, angles = self.get_source_coordinates(coord, times=times, loc=loc)
+
+        freq, norm_weights = self._resolve_freqs(freq, num_freq, spi)
+
+        mid_idx = len(times) // 2
+        self.log.debug(f"get_time_variable_beamgain: middle time coordinates")
+        self.log.debug(f"  xpyp=[{xpyp[0,mid_idx]:.2f}, {xpyp[1,mid_idx]:.2f}]")
+
+        beam_vals = self.interpolate_beam(
+            xpyp, freq,
+            var=var, i=i, j=j)
+
+        self.log.debug(f"  beam values at middle: {beam_vals[:, mid_idx]}")
+    
+        if spi is not None:
+            beam_vals = (beam_vals * norm_weights[:, np.newaxis]).sum(axis=0)
+
+        return beam_vals
+
 
     def get_rotation_averaged_beam(self, l: Optional[np.ndarray] = None,
                                    m: Optional[np.ndarray] = None,
                                    times: Optional[Time] = None,
-                                   loc: EarthLocation = None,
+                                   loc: Optional[EarthLocation] = None,
                                    freq: Optional[np.ndarray] = None,
                                    num_freq: Optional[int] = None,
                                    spi: Optional[float] = None,
                                    ncpu: Optional[int] = None,
                                    time_stepping: int = 4,
                                    chunk_size: int = 1024**2,
-                                   var: str = 'nstokes', i: str = "I", j: str = "I"):
+                                   var: str = 'nstokes', i: str = "I", j: str = "I") -> Tuple[np.ndarray, np.ndarray]:
         """
-        Computes the rotationally averaged beam at the given l/m coordinates.
+        Compute the rotation-averaged beam at specified l/m coordinates.
 
         Given a grid of l/m coordinates (in degrees, relative to field center),
         computes the average beam value at each position by rotating through
         the parallactic angles corresponding to the given times.
 
         Args:
-            l: 1D or 2D array of l coordinates (degrees), or None to use image grid
-            m: 1D or 2D array of m coordinates (degrees), or None to use image grid
-            times: Times to average over (uses stored times if None)
-            loc: Observer location (defaults to MeerKAT)
-            freq: Frequencies to sample (uses all beam frequencies if None)
-            num_freq: Number of linearly spaced frequencies to use. Mutually
-                      exclusive with freq.
-            spi: Spectral index. If given, average over frequency with weights
-                 (freq/freq[0])^spi, returning 2D arrays.
-            ncpu: Number of CPUs for parallel computation. Defaults to number
-                  of physical cores.
-            time_stepping: Use every Nth timeslot (default 4) to reduce computation.
-            chunk_size: Number of spatial pixels to process at once (default 1024^2).
-                        Limits memory usage.
+            l: 1D or 2D array of l coordinates in degrees (east offset from center).
+               If None, uses image grid. If 1D, will be meshed with m.
+            m: 1D or 2D array of m coordinates in degrees (north offset from center).
+               If None, uses image grid. If 1D, will be meshed with l.
+            times: Times to average over. If None, uses times from image/dataset.
+            loc: Observer location. If None, uses MeerKAT.
+            freq: Explicit frequency array in Hz. If None, uses beam dataset frequencies.
+            num_freq: Number of linearly spaced frequencies. Mutually exclusive with freq.
+            spi: Spectral index. If provided, averages over frequency with weights
+                 (freq/freq[0])^spi, returning 2D spatial arrays.
+            ncpu: Number of CPUs for parallel computation. If None, uses half of
+                  available cores (physical cores, assuming hyperthreading).
+            time_stepping: Use every Nth timeslot (default 4) to reduce computation
+                           while maintaining representative parallactic angle coverage.
+            chunk_size: Number of spatial pixels to process at once (default 1024²).
+                        Controls memory usage for large grids.
             var: Beam variable to interpolate ('nstokes', 'stokes', 'njones', 'jones')
-            i, j: Stokes/Jones indices
+            i, j: Stokes or Jones indices (e.g., "I", "Q", 0, 1)
 
         Returns:
-            Tuple of (mean_beam, variance_beam), each of shape (NFREQ, NM, NL),
-            or (NM, NL) if single freq or if spi is specified.
+            Tuple of (mean_beam, variance_beam) as np.ndarray:
+                - If spi is None and len(freq) > 1: both arrays have shape (NFREQ, NM, NL)
+                - If spi is not None or len(freq) == 1: both arrays have shape (NM, NL)
+                Where NM, NL are the dimensions of the l/m grid.
+
+        Raises:
+            RuntimeError: If times are not available and not provided.
+            ValueError: If both freq and num_freq are specified.
         """
         import os
         from concurrent.futures import ThreadPoolExecutor
@@ -338,14 +427,9 @@ class BeamWizard(object):
             times = self.times
         if time_stepping > 1:
             times = times[::time_stepping]
-        if freq is not None and num_freq is not None:
-            raise ValueError("freq and num_freq are mutually exclusive")
-        if freq is None:
-            bds_freqs = self.bds.coords['FREQ'].values
-            if num_freq is not None:
-                freq = np.linspace(bds_freqs[0], bds_freqs[-1], num_freq)
-            else:
-                freq = bds_freqs
+
+        freq, norm_weights = self._resolve_freqs(freq, num_freq, spi)
+
         if l is None:
             l = self.l_grid
         if m is None:
@@ -372,10 +456,10 @@ class BeamWizard(object):
         altaz_ncp = ncp.transform_to(frame)
         pa = altaz_centre.position_angle(altaz_ncp)
 
-        # Compute spectral weights if averaging over frequency
-        if spi is not None:
-            spectral_weights = (freq / freq[0]) ** spi
-            norm_weights = spectral_weights / spectral_weights.sum()
+        # Use middle time as reference for relative rotation
+        # Input l/m coordinates are typically computed at a reference time,
+        # so we rotate relative to that time's PA
+        pa_ref = pa[len(pa) // 2]
 
         n_times = len(times)
         n_pixels = len(ll_flat)
@@ -403,17 +487,19 @@ class BeamWizard(object):
             mm_chunk = mm_flat[chunk_start:chunk_end]
 
             def process_time(t_idx):
-                pa_t = pa[t_idx].rad
-                # Rotate l/m coordinates by parallactic angle
-                l_rot = ll_chunk * np.cos(pa_t) - mm_chunk * np.sin(pa_t)
-                m_rot = ll_chunk * np.sin(pa_t) + mm_chunk * np.cos(pa_t)
+                # Rotate l/m coordinates by parallactic angle relative to reference time
+                # Input l/m are defined at reference time (pa_ref), rotate to current PA
+                delta_pa = (pa[t_idx] - pa_ref).rad
+                l_rot = ll_chunk * np.cos(delta_pa) - mm_chunk * np.sin(delta_pa)
+                m_rot = ll_chunk * np.sin(delta_pa) + mm_chunk * np.cos(delta_pa)
 
                 # Convert to beam pixel coordinates
                 xp = l_rot / self.bds.attrs['dx'] + self.bds.attrs['x0']
                 yp = m_rot / self.bds.attrs['dy'] + self.bds.attrs['y0']
 
                 # Interpolate beam at these coordinates
-                xpyp = np.array([yp, xp])  # beam is indexed as Y, X
+                # Note: interpolate_beam expects [X, Y] format (uses xpyp[0] as X, xpyp[1] as Y)
+                xpyp = np.array([xp, yp])
                 beam_vals = self.interpolate_beam(xpyp, freq, var=var, i=i, j=j)
 
                 # Average over frequency if spectral index is given
