@@ -242,7 +242,7 @@ class BeamWizard(object):
         Given a sky position and a list of times, derives the in-beam coordinates of the source (in beam pixels)
         """
         if loc is None:
-            loc = loc or self.default_location
+            loc = self.default_location
         if times is None:
             if self.times is None:
                 raise RuntimeError("explicit times must be supplied, since BeamWizard was constructed without observational time info")
