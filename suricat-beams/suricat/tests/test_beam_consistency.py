@@ -269,7 +269,7 @@ def run_example_test(bds_path: str, image_path: str,
 @click.option('--freq', type=str, default=None,
               help='Comma-separated frequency values in Hz (e.g., "1e9,1.5e9,2e9")')
 @click.option('--num-freq', type=int, default=3,
-              help='Number of frequencies to test (default: 1, ignored if --freq is provided)')
+              help='Number of frequencies to test (default: 3, ignored if --freq is provided)')
 @click.option('--spi', type=float, default=None,
               help='Spectral index for frequency averaging (default: None)')
 def test_beam_consistency_cli(bds_path, image_path, ra, dec,
