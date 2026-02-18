@@ -26,7 +26,7 @@ def collect_beam_gain_to_source(bds_name, image_name, coord: Union[SkyCoord, str
         freq = [freq]
     log.info(f"{len(freq)} channels from {min(freq)} to {max(freq)}")
     
-    xpyp, seps, angles = bw.get_source_coodinates(coord, time)
+    xpyp, seps, angles = bw.get_source_coordinates(coord, time)
     log.info(f"coordinates are {xpyp}")
     log.info(f"distances are {seps}")
     log.info(f"angles are {angles}")
