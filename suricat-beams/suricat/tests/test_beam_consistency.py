@@ -147,7 +147,10 @@ def test_time_variable_vs_rotation_averaged(beam_wizard,
             freq_array = bds_freqs  # Used all frequencies for averaging
             display_freqs = [bds_freqs[0], bds_freqs[-1]]  # Show range
         elif num_freq == 1:
-            freq_array = np.array([bds_freqs[len(bds_freqs)//2]])
+            # When a single frequency is requested, `_resolve_freqs` uses the first
+            # frequency in `bds_freqs` (via np.linspace(bds_freqs[0], bds_freqs[-1], 1)).
+            # For consistency, report and return that same frequency here.
+            freq_array = np.array([bds_freqs[0]])
             display_freqs = freq_array
         else:
             freq_array = np.linspace(bds_freqs[0], bds_freqs[-1], num_freq)
