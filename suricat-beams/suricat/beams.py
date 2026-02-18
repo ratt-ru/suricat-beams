@@ -401,9 +401,10 @@ class BeamWizard(object):
 
         Returns:
             Tuple of (mean_beam, variance_beam) as np.ndarray:
-                - If spi is None and len(freq) > 1: both arrays have shape (NFREQ, NM, NL)
-                - If spi is not None or len(freq) == 1: both arrays have shape (NM, NL)
-                Where NM, NL are the dimensions of the l/m grid.
+                - If spi is None and len(freq) > 1: both arrays have shape (NFREQ, NL, NM)
+                - If spi is not None or len(freq) == 1: both arrays have shape (NL, NM)
+                Where NL and NM are the dimensions of the l/m grid, corresponding to
+                the lengths of the l and m axes respectively (matching indexing='ij').
 
         Raises:
             RuntimeError: If times are not available and not provided.
