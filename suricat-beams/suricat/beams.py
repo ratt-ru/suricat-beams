@@ -216,8 +216,8 @@ class BeamWizard(object):
         crpix1, crpix2 = fitshdr['CRPIX1'], fitshdr['CRPIX2']
         cdelt1, cdelt2 = fitshdr['CDELT1'], fitshdr['CDELT2']
         # l/m are offsets from center in degrees (l increases to the east, m to the north)
-        self.l_grid = (np.arange(nx) - (crpix1 - 1)) * cdelt1
-        self.m_grid = (np.arange(ny) - (crpix2 - 1)) * cdelt2
+        self.l_grid: np.ndarray = (np.arange(nx) - (crpix1 - 1)) * cdelt1
+        self.m_grid: np.ndarray = (np.arange(ny) - (crpix2 - 1)) * cdelt2
         log.info(f"default l/m grid: {nx}x{ny} pixels, "
                  f"l=[{self.l_grid[0]:.4f}, {self.l_grid[-1]:.4f}], "
                  f"m=[{self.m_grid[0]:.4f}, {self.m_grid[-1]:.4f}] deg")
