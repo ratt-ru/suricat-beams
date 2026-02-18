@@ -264,7 +264,7 @@ class BeamWizard(object):
         yp = y / self.bds.attrs['dy']  + self.bds.attrs['y0']
         return np.array([xp, yp]), seps, angles
 
-    def interpolate_beam(self, xpyp: np.ndarray, freq: List[float], var: str = 'nstokes', i="I", j="I"):
+    def interpolate_beam(self, xpyp: np.ndarray, freq: Union[List[float], np.ndarray], var: str = 'nstokes', i="I", j="I"):
         # beam is I,J,FREQ,Y,X
         freq = self.freq_to_index(freq)
         fx = np.meshgrid(freq, xpyp[0], indexing='ij')   # mesh freq,x
