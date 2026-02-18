@@ -438,11 +438,16 @@ class BeamWizard(object):
         else:
             # When l and m are 2D arrays, ensure they have the same shape
             if l.ndim == 2 and m.ndim == 2 and l.shape != m.shape:
-                raise ValueError(
-                    f"When both 'l' and 'm' are 2D arrays, they must have the same shape, "
-                    f"but got l.shape={l.shape} and m.shape={m.shape}."
-                )
+        # Create meshgrid if l and m are 1D; use as-is if both are 2D
+        if l.ndim == 1 and m.ndim == 1:
+            ll, mm = np.meshgrid(l, m, indexing='ij')
+        elif l.ndim == 2 and m.ndim == 2:
             ll, mm = l, m
+        else:
+            raise ValueError(
+                f"Inconsistent dimensions for l and m: l.ndim={l.ndim}, m.ndim={m.ndim}. "
+                "Both must be either 1D (to form a meshgrid) or 2D (pre-constructed grid)."
+            )
 
         shape = ll.shape
         ll_flat = ll.ravel()
