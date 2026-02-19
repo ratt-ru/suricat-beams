@@ -370,6 +370,7 @@ class BeamWizard(object):
                                    spi: Optional[float] = None,
                                    ncpu: Optional[int] = None,
                                    time_stepping: int = 4,
+                                   pixel_stepping: int = 4,
                                    chunk_size: int = 1024**2,
                                    var: str = 'nstokes', i: str = "I", j: str = "I") -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -394,6 +395,9 @@ class BeamWizard(object):
                   available cores (physical cores, assuming hyperthreading).
             time_stepping: Use every Nth timeslot (default 4) to reduce computation
                            while maintaining representative parallactic angle coverage.
+            pixel_stepping: Compute on every Nth pixel in l and m (default 4), then
+                            interpolate back to the full grid. Reduces computation for
+                            large images; use 1 to disable.
             chunk_size: Number of spatial pixels to process at once (default 1024²).
                         Controls memory usage for large grids.
             var: Beam variable to interpolate ('nstokes', 'stokes', 'njones', 'jones')
@@ -449,9 +453,19 @@ class BeamWizard(object):
                 "Both must be either 1D (to form a meshgrid) or 2D (pre-constructed grid)."
             )
 
-        shape = ll.shape
-        ll_flat = ll.ravel()
-        mm_flat = mm.ravel()
+        full_shape = ll.shape
+
+        # Apply pixel stepping: subsample the grid for cheaper computation
+        if pixel_stepping > 1:
+            ll_compute = ll[::pixel_stepping, ::pixel_stepping]
+            mm_compute = mm[::pixel_stepping, ::pixel_stepping]
+        else:
+            ll_compute = ll
+            mm_compute = mm
+
+        shape = ll_compute.shape
+        ll_flat = ll_compute.ravel()
+        mm_flat = mm_compute.ravel()
 
         # Compute parallactic angles at each time for the field center
         frame = AltAz(obstime=times, location=loc)
@@ -465,10 +479,11 @@ class BeamWizard(object):
         n_times = len(times)
         n_pixels = len(ll_flat)
         n_chunks = (n_pixels + chunk_size - 1) // chunk_size
+        stepping_info = f", pixel_stepping={pixel_stepping}" if pixel_stepping > 1 else ""
         self.log.info(f"computing rotation-averaged beam over {n_times} times, "
                       f"PA range {pa.min().deg:.1f} to {pa.max().deg:.1f} deg, "
                       f"{len(freq)} frequency planes, {n_pixels} pixels in {n_chunks} chunks, "
-                      f"using {ncpu} threads")
+                      f"using {ncpu} threads{stepping_info}")
 
         # Precompute the spline filter to ensure it's cached before threading
         self._get_prefilter(var, i, j)
@@ -534,10 +549,34 @@ class BeamWizard(object):
         beam_mean = beam_sum / n_times
         beam_var = beam_sum_sq / n_times - beam_mean ** 2
 
-        # Reshape back to grid
+        # Reshape to coarse grid
         if spi is not None or len(freq) == 1:
-            return beam_mean.reshape(shape), beam_var.reshape(shape)
+            beam_mean = beam_mean.reshape(shape)
+            beam_var = beam_var.reshape(shape)
         else:
-            return beam_mean.reshape((len(freq),) + shape), beam_var.reshape((len(freq),) + shape)
+            beam_mean = beam_mean.reshape((len(freq),) + shape)
+            beam_var = beam_var.reshape((len(freq),) + shape)
+
+        # Interpolate back to full resolution if pixel_stepping was applied
+        if pixel_stepping > 1 and shape != full_shape:
+            from scipy.ndimage import map_coordinates
+            # Fractional coarse-grid coordinates for each full-resolution pixel
+            fi = np.arange(full_shape[0]) / pixel_stepping
+            fj = np.arange(full_shape[1]) / pixel_stepping
+            fi2d, fj2d = np.meshgrid(fi, fj, indexing='ij')
+            coords = np.array([fi2d.ravel(), fj2d.ravel()])
+            if beam_mean.ndim == 2:
+                beam_mean = map_coordinates(beam_mean, coords, order=1, mode='nearest').reshape(full_shape)
+                beam_var  = map_coordinates(beam_var,  coords, order=1, mode='nearest').reshape(full_shape)
+            else:
+                mean_full = np.empty((len(freq),) + full_shape)
+                var_full  = np.empty((len(freq),) + full_shape)
+                for f_idx in range(len(freq)):
+                    mean_full[f_idx] = map_coordinates(beam_mean[f_idx], coords, order=1, mode='nearest').reshape(full_shape)
+                    var_full[f_idx]  = map_coordinates(beam_var[f_idx],  coords, order=1, mode='nearest').reshape(full_shape)
+                beam_mean = mean_full
+                beam_var  = var_full
+
+        return beam_mean, beam_var
 
 
