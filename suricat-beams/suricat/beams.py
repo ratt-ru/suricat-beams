@@ -580,3 +580,241 @@ class BeamWizard(object):
         return beam_mean, beam_var
 
 
+    def get_time_freq_beam(self,
+                           filename: str,
+                           var_name: str,
+                           dim_names: Tuple[str, str, str, str, str] = ("ij", "time", "freq", "x", "y"),
+                           ds: Optional[xarray.Dataset] = None,
+                           l: Optional[np.ndarray] = None,
+                           m: Optional[np.ndarray] = None,
+                           times: Optional[Time] = None,
+                           loc: Optional[EarthLocation] = None,
+                           freq: Optional[np.ndarray] = None,
+                           num_freq: Optional[int] = None,
+                           pixel_stepping: int = 4,
+                           time_stepping: int = 1,
+                           ncpu: Optional[int] = None,
+                           chunks_time: int = 1,
+                           chunks_freq: Optional[int] = None,
+                           chunks_x: int = 256,
+                           chunks_y: int = 256,
+                           var: str = 'nstokes',
+                           ij_list: Optional[List[Tuple]] = None):
+        """
+        Compute the beam per time and frequency and write to a zarr dataset.
+
+        Similar to get_rotation_averaged_beam, but instead of averaging over time,
+        writes the full (ij, time, freq, x, y) beam cube to a zarr dataset.
+        Beam computation and upsampling are parallelized across time/ij combinations
+        using a thread pool; zarr writes happen in the main thread via
+        ds.to_zarr() with region as futures complete.
+
+        Args:
+            filename: Path for the output zarr store.
+            var_name: Name of the beam variable in the dataset.
+            dim_names: Tuple of five dimension names for the output axes
+                       (ij, time, freq, x, y).
+            ds: Optional existing xarray Dataset. If None, a new dataset is created.
+                If provided, its coordinates are used as defaults for l, m, times,
+                freq; explicitly provided values are checked for consistency.
+            l: 1D array of l coordinates in degrees. If None, uses ds coords or image grid.
+            m: 1D array of m coordinates in degrees. If None, uses ds coords or image grid.
+            times: Times to compute at. If None, uses ds coords or image/dataset times.
+            loc: Observer location. If None, uses MeerKAT.
+            freq: Explicit frequency array in Hz. If None, uses ds coords or beam
+                  dataset frequencies.
+            num_freq: Number of linearly spaced frequencies. Mutually exclusive with freq.
+            pixel_stepping: Compute on every Nth pixel in l and m (default 4), then
+                            interpolate back to the full grid.
+            time_stepping: Use every Nth timeslot (default 1).
+            ncpu: Number of CPUs for parallel computation. If None, uses half of
+                  available cores.
+            chunks_time: Zarr chunk size along the time axis (default 1).
+            chunks_freq: Zarr chunk size along the frequency axis (default: all freqs).
+            chunks_x: Zarr chunk size along the x axis (default 256).
+            chunks_y: Zarr chunk size along the y axis (default 256).
+            var: Beam variable to interpolate ('nstokes', 'stokes', 'njones', 'jones').
+            ij_list: List of (i, j) tuples specifying which matrix elements to compute.
+                     Default is [("I", "I")].
+
+        Returns:
+            The xarray Dataset.
+        """
+        import os
+        import dask.array as da
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        dim_ij, dim_time, dim_freq, dim_x, dim_y = dim_names
+
+        if loc is None:
+            loc = self.default_location
+        if ij_list is None:
+            ij_list = [("I", "I")]
+        if ncpu is None:
+            ncpu = os.cpu_count() // 2 or 1
+
+        # Resolve parameters from ds or defaults
+        if ds is not None:
+            def _check_or_default(value, coord_name, label):
+                coord = ds.coords[coord_name].values
+                if value is not None:
+                    if not np.allclose(value, coord):
+                        raise ValueError(
+                            f"{label} inconsistent with dataset coordinate {coord_name}")
+                    return value
+                return coord
+            l = _check_or_default(l, dim_x, "l")
+            m = _check_or_default(m, dim_y, "m")
+            freq = _check_or_default(freq, dim_freq, "freq")
+            if times is not None:
+                ds_times = Time(ds.coords[dim_time].values, format='mjd')
+                if not np.allclose(times.mjd, ds_times.mjd):
+                    raise ValueError("times inconsistent with dataset coordinate")
+            else:
+                times = Time(ds.coords[dim_time].values, format='mjd')
+        else:
+            if times is None:
+                if self.times is None:
+                    raise RuntimeError("times must be supplied, since BeamWizard was "
+                                       "constructed without observational time info")
+                times = self.times
+            if l is None:
+                l = self.l_grid
+            if m is None:
+                m = self.m_grid
+            freq, _ = self._resolve_freqs(freq, num_freq, spi=None)
+
+        if time_stepping > 1:
+            times = times[::time_stepping]
+
+        # Create meshgrid if l and m are 1D
+        if l.ndim == 1 and m.ndim == 1:
+            ll, mm = np.meshgrid(l, m, indexing='ij')
+        elif l.ndim == 2 and m.ndim == 2:
+            if l.shape != m.shape:
+                raise ValueError(
+                    f"Inconsistent shapes for l and m: l.shape={l.shape}, m.shape={m.shape}.")
+            ll, mm = l, m
+        else:
+            raise ValueError(
+                f"Inconsistent dimensions for l and m: l.ndim={l.ndim}, m.ndim={m.ndim}.")
+
+        full_shape = ll.shape
+        nx, ny = full_shape
+
+        # Apply pixel stepping
+        if pixel_stepping > 1:
+            ll_compute = ll[::pixel_stepping, ::pixel_stepping]
+            mm_compute = mm[::pixel_stepping, ::pixel_stepping]
+        else:
+            ll_compute = ll
+            mm_compute = mm
+
+        compute_shape = ll_compute.shape
+        ll_flat = ll_compute.ravel()
+        mm_flat = mm_compute.ravel()
+
+        # Precompute upsampling coordinates (shared by all threads)
+        if pixel_stepping > 1 and compute_shape != full_shape:
+            fi = np.arange(full_shape[0]) / pixel_stepping
+            fj = np.arange(full_shape[1]) / pixel_stepping
+            fi2d, fj2d = np.meshgrid(fi, fj, indexing='ij')
+            upsample_coords = np.array([fi2d.ravel(), fj2d.ravel()])
+        else:
+            upsample_coords = None
+
+        # Compute parallactic angles
+        frame = AltAz(obstime=times, location=loc)
+        altaz_centre = self.centre.transform_to(frame)
+        ncp = SkyCoord(ra=0*u.deg, dec=90*u.deg)
+        altaz_ncp = ncp.transform_to(frame)
+        pa = altaz_centre.position_angle(altaz_ncp)
+
+        n_times = len(times)
+        n_freq = len(freq)
+        n_ij = len(ij_list)
+
+        if chunks_freq is None:
+            chunks_freq = n_freq
+
+        self.log.info(f"computing time-freq beam: {n_ij} ij elements, {n_times} times, "
+                      f"PA range {pa.min().deg:.1f} to {pa.max().deg:.1f} deg, "
+                      f"{n_freq} freqs, {nx}x{ny} pixels, {ncpu} threads"
+                      f"{f', pixel_stepping={pixel_stepping}' if pixel_stepping > 1 else ''}")
+
+        # Precompute spline filters for all ij pairs
+        for ii, jj in ij_list:
+            self._get_prefilter(var, ii, jj)
+
+        # Create dataset and initialize zarr store if needed
+        if ds is None:
+            ij_labels = [f"{ii}{jj}" for ii, jj in ij_list]
+            ds = xarray.Dataset({
+                var_name: xarray.DataArray(
+                    da.zeros((n_ij, n_times, n_freq, nx, ny),
+                             chunks=(1, chunks_time, chunks_freq, chunks_x, chunks_y),
+                             dtype='float32'),
+                    dims=dim_names,
+                    coords={
+                        dim_ij: ij_labels,
+                        dim_time: times.mjd,
+                        dim_freq: freq,
+                        dim_x: l if l.ndim == 1 else np.arange(nx),
+                        dim_y: m if m.ndim == 1 else np.arange(ny),
+                    }
+                )
+            })
+            ds.to_zarr(filename, mode='w', compute=False)
+
+        def compute_plane(pa_t, ii, jj):
+            """Compute beam for the full spatial plane at one time/ij, with upsampling."""
+            l_rot = mm_flat * np.sin(pa_t) - ll_flat * np.cos(pa_t)
+            m_rot = ll_flat * np.sin(pa_t) + mm_flat * np.cos(pa_t)
+            xp = l_rot / self.bds.attrs['dx'] + self.bds.attrs['x0']
+            yp = m_rot / self.bds.attrs['dy'] + self.bds.attrs['y0']
+            xpyp = np.array([xp, yp])
+            beam_vals = self.interpolate_beam(xpyp, freq, var=var, i=ii, j=jj)
+            beam_2d = beam_vals.reshape((n_freq,) + compute_shape)
+
+            if upsample_coords is not None:
+                beam_full = np.empty((n_freq,) + full_shape, dtype=np.float32)
+                for f_idx in range(n_freq):
+                    beam_full[f_idx] = map_coordinates(
+                        beam_2d[f_idx], upsample_coords,
+                        order=1, mode='nearest').reshape(full_shape)
+                return beam_full
+
+            return beam_2d.astype(np.float32)
+
+        # Parallelize across (time, ij); write to zarr in main thread
+        with ThreadPoolExecutor(max_workers=ncpu) as executor:
+            futures = {}
+            for t_idx in range(n_times):
+                pa_t = pa[t_idx].rad
+                for ij_idx, (ii, jj) in enumerate(ij_list):
+                    fut = executor.submit(compute_plane, pa_t, ii, jj)
+                    futures[fut] = (ij_idx, t_idx)
+
+            done_count = 0
+            total = n_times * n_ij
+            for fut in as_completed(futures):
+                ij_idx, t_idx = futures[fut]
+                plane = fut.result()
+                # Write this plane to zarr using region
+                plane_ds = xarray.Dataset({
+                    var_name: xarray.DataArray(
+                        plane[np.newaxis, np.newaxis],
+                        dims=dim_names
+                    )
+                })
+                plane_ds.to_zarr(filename, region={
+                    dim_ij: slice(ij_idx, ij_idx + 1),
+                    dim_time: slice(t_idx, t_idx + 1),
+                })
+                done_count += 1
+                if done_count % max(1, total // 10) == 0 or done_count == total:
+                    self.log.info(f"  written {done_count}/{total} planes")
+
+        return ds
+
+
