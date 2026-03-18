@@ -13,6 +13,7 @@ import numpy as np
 from typing import Optional, List
 from scabha.schema_utils import clickify_parameters
 from .main import cli, schemas
+import dask.array as da
 
 
 def bds_to_xradio(bds_path: str, image_path: str, output: str,
@@ -109,10 +110,10 @@ def _enrich_bds_xradio(zarr_path: str, bw, var_name: str, polarizations: List[st
     pol_arr.attrs['_ARRAY_DIMENSIONS'] = ['polarization']
 
     # Transpose data variable from (polarization, time, frequency, l, m)
-    # to xradio order (time, frequency, polarization, l, m)
-    data = store[var_name][:]  # shape: (npol, ntime, nfreq, nl, nm)
-    data = data.transpose(1, 2, 0, 3, 4)  # -> (ntime, nfreq, npol, nl, nm)
-    n_time, n_freq, n_pol, nl, nm = data.shape
+    # to xradio order (time, frequency, polarization, l, m) lazily using dask
+    # Existing array is chunked in (polarization, time, frequency, l, m)
+    dask_arr = da.from_zarr(zarr_path, component=var_name)
+    dask_arr = dask_arr.transpose(1, 2, 0, 3, 4)  # -> (time, frequency, polarization, l, m)
 
     # Read existing chunk info
     old_chunks = store[var_name].chunks
@@ -120,8 +121,10 @@ def _enrich_bds_xradio(zarr_path: str, bw, var_name: str, polarizations: List[st
     new_chunks = (old_chunks[1], old_chunks[2], old_chunks[0],
                   old_chunks[3], old_chunks[4])
 
-    store.create_dataset(var_name, data=data, chunks=new_chunks,
-                         dtype='float32', overwrite=True)
+    # Rechunk to desired order and write back to the same zarr store chunk-by-chunk
+    dask_arr = dask_arr.rechunk(new_chunks)
+    dask_arr.to_zarr(zarr_path, component=var_name, overwrite=True)
+
     store[var_name].attrs['_ARRAY_DIMENSIONS'] = [
         'time', 'frequency', 'polarization', 'l', 'm']
 

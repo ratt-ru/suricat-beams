@@ -420,10 +420,13 @@ class BeamWizard(object):
         if loc is None:
             loc = self.default_location
         if times is None:
-            if self.times is None:
-                raise RuntimeError("times must be supplied, since BeamWizard was "
-                                   "constructed without observational time info")
-            times = self.times
+            available_times = getattr(self, "times", None)
+            if available_times is None:
+                raise RuntimeError(
+                    "times must be supplied, since BeamWizard was "
+                    "constructed without observational time info"
+                )
+            times = available_times
         if time_stepping > 1:
             times = times[::time_stepping]
 
@@ -434,23 +437,26 @@ class BeamWizard(object):
         if m is None:
             m = self.m_grid
         if ncpu is None:
-            ncpu = os.cpu_count() // 2 or 1  # physical cores (assume hyperthreading)
+            cpu_count = os.cpu_count() or 1
+            ncpu = max(1, cpu_count // 2)  # physical cores (assume hyperthreading)
 
-        # Create meshgrid if l and m are 1D
+        # Set up l/m grid:
+        # - if both are 1D, create a meshgrid;
+        # - if both are 2D, use them directly (shapes must match);
+        # - otherwise, raise an error.
         if l.ndim == 1 and m.ndim == 1:
             ll, mm = np.meshgrid(l, m, indexing='ij')
         elif l.ndim == 2 and m.ndim == 2:
-            # When l and m are 2D arrays, ensure they have the same shape
             if l.shape != m.shape:
                 raise ValueError(
-                    f"Inconsistent shapes for l and m: l.shape={l.shape}, m.shape={m.shape}. "
-                    "Both must be either 1D (to form a meshgrid) or 2D (pre-constructed grid).")
-            else:
-                ll, mm = l, m
+                    f"Inconsistent shapes for 2D l and m grids: l.shape={l.shape}, m.shape={m.shape}. "
+                    "When both l and m are 2D, they must have the same shape."
+                )
+            ll, mm = l, m
         else:
             raise ValueError(
                 f"Inconsistent dimensions for l and m: l.ndim={l.ndim}, m.ndim={m.ndim}. "
-                "Both must be either 1D (to form a meshgrid) or 2D (pre-constructed grid)."
+                "Both must be either 1D (to form a meshgrid) or 2D (pre-constructed grid with matching shapes)."
             )
 
         full_shape = ll.shape

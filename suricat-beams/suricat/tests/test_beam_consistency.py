@@ -11,20 +11,23 @@ from astropy.time import Time
 import astropy.units as u
 from typing import Optional, Dict
 import click
-import matplotlib.pyplot as plt
+try:
+    import matplotlib.pyplot as plt
+except ImportError:  # pragma: no cover
+    plt = None
 
 
-def test_time_variable_vs_rotation_averaged(beam_wizard,
-                                             srcpos: SkyCoord,
-                                             times: Optional[Time] = None,
-                                             loc: Optional[EarthLocation] = None,
-                                             freq: Optional[np.ndarray] = None,
-                                             num_freq: int = 1,
-                                             spi: Optional[float] = None,
-                                             time_stepping: int = 4,
-                                             var: str = 'nstokes',
-                                             i: str = "I",
-                                             j: str = "I") -> Dict:
+def time_variable_vs_rotation_averaged(beam_wizard,
+                                        srcpos: SkyCoord,
+                                        times: Optional[Time] = None,
+                                        loc: Optional[EarthLocation] = None,
+                                        freq: Optional[np.ndarray] = None,
+                                        num_freq: int = 1,
+                                        spi: Optional[float] = None,
+                                        time_stepping: int = 4,
+                                        var: str = 'nstokes',
+                                        i: str = "I",
+                                        j: str = "I") -> Dict:
     """
     Test consistency between get_time_variable_beamgain() and get_rotation_averaged_beam().
 
@@ -139,6 +142,7 @@ def test_time_variable_vs_rotation_averaged(beam_wizard,
     # Compare results
     rel_diff = np.abs(tv_mean - ra_mean) / ((tv_mean + ra_mean) / 2) * 100
     consistent = np.all(rel_diff < 1.0)  # Less than 1% difference threshold
+    assert consistent, f"Inconsistent beam results: max relative difference {np.max(rel_diff):.3f}%"
 
     # Get frequency array for reporting
     if freq is None:
