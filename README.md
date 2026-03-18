@@ -26,7 +26,7 @@ suricat bds2xradio beam.bds.zarr image.zarr output.zarr \
     --polarizations I --beam-type nstokes       # Render BDS to xradio zarr
 suricat mdv2xradio mdv-beams-L.npz output.zarr \
     --antenna -1 --jones HH --part real \
-    --var-name SKY                              # Convert MdV npz to xradio zarr
+    --output-var SKY                            # Convert MdV npz to xradio zarr
 ```
 
 ### Output format
