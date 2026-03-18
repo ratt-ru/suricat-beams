@@ -589,7 +589,7 @@ class BeamWizard(object):
     def get_time_freq_beam(self,
                            filename: str,
                            var_name: str,
-                           dim_names: Tuple[str, str, str, str, str] = ("ij", "time", "freq", "x", "y"),
+                           dim_names: Tuple[str, str, str, str, str] = ("time", "freq", "ij", "x", "y"),
                            ds: Optional[xarray.Dataset] = None,
                            l: Optional[np.ndarray] = None,
                            m: Optional[np.ndarray] = None,
@@ -605,7 +605,9 @@ class BeamWizard(object):
                            chunks_x: int = 256,
                            chunks_y: int = 256,
                            var: str = 'nstokes',
-                           ij_list: Optional[List[Tuple]] = None):
+                           ij_list: Optional[List[Tuple]] = None,
+                           compressor=None,
+                           filters=None):
         """
         Compute the beam per time and frequency and write to a zarr dataset.
 
@@ -619,7 +621,7 @@ class BeamWizard(object):
             filename: Path for the output zarr store.
             var_name: Name of the beam variable in the dataset.
             dim_names: Tuple of five dimension names for the output axes
-                       (ij, time, freq, x, y).
+                       (time, freq, ij, x, y).
             ds: Optional existing xarray Dataset. If None, a new dataset is created.
                 If provided, its coordinates are used as defaults for l, m, times,
                 freq; explicitly provided values are checked for consistency.
@@ -642,15 +644,17 @@ class BeamWizard(object):
             var: Beam variable to interpolate ('nstokes', 'stokes', 'njones', 'jones').
             ij_list: List of (i, j) tuples specifying which matrix elements to compute.
                      Default is [("I", "I")].
+            compressor: Zarr compressor (e.g. numcodecs.Blosc). If None, uses zarr default.
+            filters: List of zarr filters (e.g. [numcodecs.Delta]). If None, no filters.
 
         Returns:
             The xarray Dataset.
         """
         import os
-        import dask.array as da
+        import zarr
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        dim_ij, dim_time, dim_freq, dim_x, dim_y = dim_names
+        dim_time, dim_freq, dim_ij, dim_x, dim_y = dim_names
 
         if loc is None:
             loc = self.default_location
@@ -752,25 +756,41 @@ class BeamWizard(object):
         for ii, jj in ij_list:
             self._get_prefilter(var, ii, jj)
 
-        # Create dataset and initialize zarr store if needed
+        # Build shape, chunks and coords in dim_names
+        dim_sizes = {dim_ij: n_ij, dim_time: n_times, dim_freq: n_freq,
+                     dim_x: nx, dim_y: ny}
+        dim_chunks = {dim_ij: 1, dim_time: chunks_time, dim_freq: chunks_freq,
+                      dim_x: chunks_x, dim_y: chunks_y}
+        ij_labels = [f"{ii}{jj}" for ii, jj in ij_list]
+        dim_coords = {
+            dim_ij: ij_labels,
+            dim_time: times.mjd,
+            dim_freq: freq,
+            dim_x: l if l.ndim == 1 else np.arange(nx),
+            dim_y: m if m.ndim == 1 else np.arange(ny),
+        }
+
+        shape = tuple(dim_sizes[d] for d in dim_names)
+        chunks = tuple(dim_chunks[d] for d in dim_names)
+        coords = {d: dim_coords[d] for d in dim_names}
+
+        # Determine axis positions for ij and time dimensions in output layout
+        ij_axis = list(dim_names).index(dim_ij)
+        time_axis = list(dim_names).index(dim_time)
+
+        # Create zarr store directly (no dask dependency)
         if ds is None:
-            ij_labels = [f"{ii}{jj}" for ii, jj in ij_list]
-            ds = xarray.Dataset({
-                var_name: xarray.DataArray(
-                    da.zeros((n_ij, n_times, n_freq, nx, ny),
-                             chunks=(1, chunks_time, chunks_freq, chunks_x, chunks_y),
-                             dtype='float32'),
-                    dims=dim_names,
-                    coords={
-                        dim_ij: ij_labels,
-                        dim_time: times.mjd,
-                        dim_freq: freq,
-                        dim_x: l if l.ndim == 1 else np.arange(nx),
-                        dim_y: m if m.ndim == 1 else np.arange(ny),
-                    }
-                )
-            })
-            ds.to_zarr(filename, mode='w', compute=False)
+            store = zarr.open(filename, mode='w')
+            store.create_dataset(var_name, shape=shape, chunks=chunks,
+                                 dtype='float32', fill_value=0,
+                                 compressor=compressor, filters=filters)
+            store[var_name].attrs['_ARRAY_DIMENSIONS'] = list(dim_names)
+            # Write coordinate arrays
+            for dim_idx, dim in enumerate(dim_names):
+                coord_data = np.asarray(coords[dim])
+                store.create_dataset(dim, data=coord_data, overwrite=True)
+                store[dim].attrs['_ARRAY_DIMENSIONS'] = [dim]
+            zarr.consolidate_metadata(filename)
 
         def compute_plane(pa_t, ii, jj):
             """Compute beam for the full spatial plane at one time/ij, with upsampling."""
@@ -803,24 +823,17 @@ class BeamWizard(object):
 
             done_count = 0
             total = n_times * n_ij
+            zarr_arr = zarr.open(filename, mode='r+')[var_name]
             for fut in as_completed(futures):
                 ij_idx, t_idx = futures[fut]
-                plane = fut.result()
-                # Write this plane to zarr using region
-                plane_ds = xarray.Dataset({
-                    var_name: xarray.DataArray(
-                        plane[np.newaxis, np.newaxis],
-                        dims=dim_names
-                    )
-                })
-                plane_ds.to_zarr(filename, region={
-                    dim_ij: slice(ij_idx, ij_idx + 1),
-                    dim_time: slice(t_idx, t_idx + 1),
-                })
+                plane = fut.result()  # shape: (n_freq, nx, ny)
+                # Build index tuple to write plane into correct position
+                idx = [slice(None)] * 5
+                idx[time_axis] = t_idx
+                idx[ij_axis] = ij_idx
+                zarr_arr[tuple(idx)] = plane
                 done_count += 1
                 if done_count % max(1, total // 10) == 0 or done_count == total:
                     self.log.info(f"  written {done_count}/{total} planes")
-
-        return ds
 
 

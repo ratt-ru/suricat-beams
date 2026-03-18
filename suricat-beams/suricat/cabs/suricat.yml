@@ -126,6 +126,10 @@ cabs:
         dtype: str
         info: beam variable to use (nstokes, stokes, njones, jones)
         default: nstokes
+      compress:
+        dtype: bool
+        info: apply Delta+Blosc compression to zarr output
+        default: false
     outputs:
       output:
         dtype: Directory
@@ -176,6 +180,10 @@ cabs:
         dtype: int
         info: zarr chunk size along m axis
         default: 128
+      compress:
+        dtype: bool
+        info: apply Delta+Blosc compression to zarr output
+        default: false
     outputs:
       output:
         dtype: Directory

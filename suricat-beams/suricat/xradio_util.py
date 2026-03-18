@@ -11,9 +11,13 @@ Produces zarr datasets following the xradio image schema
 """
 import numpy as np
 from typing import Optional, List
+from numcodecs import Delta, Blosc
 from scabha.schema_utils import clickify_parameters
 from .main import cli, schemas
-import dask.array as da
+
+# Smooth beam data compresses well with Delta prefiltering + Blosc
+ZARR_COMPRESSOR = Blosc(cname='zstd', clevel=5, shuffle=Blosc.BITSHUFFLE)
+ZARR_FILTERS = [Delta(dtype='float32')]
 
 
 def bds_to_xradio(bds_path: str, image_path: str, output: str,
@@ -27,7 +31,8 @@ def bds_to_xradio(bds_path: str, image_path: str, output: str,
                   chunks_x: int = 256,
                   chunks_y: int = 256,
                   polarizations: Optional[List[str]] = None,
-                  beam_type: str = 'nstokes'):
+                  beam_type: str = 'nstokes',
+                  compress: bool = False):
     """
     Render a beam dataset (BDS) to an xradio-compatible zarr image.
 
@@ -47,6 +52,7 @@ def bds_to_xradio(bds_path: str, image_path: str, output: str,
         chunks_time, chunks_freq, chunks_x, chunks_y: Zarr chunk sizes
         polarizations: List of Stokes labels, e.g. ["I"] or ["I", "Q", "U", "V"]
         beam_type: Beam variable ('nstokes', 'stokes', 'njones', 'jones')
+        compress: Apply Delta+Blosc compression to zarr output (default: False)
 
     Returns:
         Path to the output zarr dataset.
@@ -65,7 +71,7 @@ def bds_to_xradio(bds_path: str, image_path: str, output: str,
     bw.get_time_freq_beam(
         filename=output,
         var_name=output_var,
-        dim_names=("polarization", "time", "frequency", "l", "m"),
+        dim_names=("time", "frequency", "polarization", "l", "m"),
         l=bw.l_grid,
         m=bw.m_grid,
         pixel_stepping=pixel_stepping,
@@ -77,7 +83,9 @@ def bds_to_xradio(bds_path: str, image_path: str, output: str,
         chunks_x=chunks_x,
         chunks_y=chunks_y,
         var=beam_type,
-        ij_list=ij_list)
+        ij_list=ij_list,
+        compressor=ZARR_COMPRESSOR if compress else None,
+        filters=ZARR_FILTERS if compress else None)
 
     _enrich_bds_xradio(output, bw, output_var, polarizations)
 
@@ -109,22 +117,8 @@ def _enrich_bds_xradio(zarr_path: str, bw, output_var: str, polarizations: List[
         'polarization', data=np.array(polarizations), overwrite=True)
     pol_arr.attrs['_ARRAY_DIMENSIONS'] = ['polarization']
 
-    # Transpose data variable from (polarization, time, frequency, l, m)
-    # to xradio order (time, frequency, polarization, l, m) lazily using dask
-    # Existing array is chunked in (polarization, time, frequency, l, m)
-    dask_arr = da.from_zarr(zarr_path, component=output_var)
-    dask_arr = dask_arr.transpose(1, 2, 0, 3, 4)  # -> (time, frequency, polarization, l, m)
-
-    # Read existing chunk info
-    old_chunks = store[output_var].chunks
-    # old_chunks is (pol, time, freq, l, m) -> remap to (time, freq, pol, l, m)
-    new_chunks = (old_chunks[1], old_chunks[2], old_chunks[0],
-                  old_chunks[3], old_chunks[4])
-
-    # Rechunk to desired order and write back to the same zarr store chunk-by-chunk
-    dask_arr = dask_arr.rechunk(new_chunks)
-    dask_arr.to_zarr(zarr_path, component=output_var, overwrite=True)
-
+    # Dimensions are already in xradio order (time, frequency, polarization, l, m)
+    # from get_time_freq_beam, just ensure attrs are set correctly
     store[output_var].attrs['_ARRAY_DIMENSIONS'] = [
         'time', 'frequency', 'polarization', 'l', 'm']
 
@@ -178,7 +172,8 @@ def mdv_to_xradio(npz_path: str, output: str,
                    output_var: str = 'SKY',
                    chunks_freq: int = 64,
                    chunks_x: int = 128,
-                   chunks_y: int = 128):
+                   chunks_y: int = 128,
+                   compress: bool = False):
     """
     Convert a raw MdV beam npz file to an xradio-compatible zarr image.
 
@@ -201,9 +196,11 @@ def mdv_to_xradio(npz_path: str, output: str,
         part: 'real', 'imag', 'abs', or 'phase'
         output_var: Data variable name (default: SKY)
         chunks_freq, chunks_x, chunks_y: Zarr chunk sizes
+        compress: Apply Delta+Blosc compression to zarr output (default: False)
     """
     import xarray
     import zarr
+    from . import LOGGER
 
     mdv = np.load(npz_path)
     beam = mdv['beam']       # (4, N_ant, N_freq, N_y, N_x) complex64
@@ -217,8 +214,8 @@ def mdv_to_xradio(npz_path: str, output: str,
 
     # Select antenna
     ant_name = antnames[antenna]
-    print(f"Antenna: {ant_name} (index {antenna})")
-    print(f"Jones element: {jones}, part: {part}")
+    LOGGER.info(f"Antenna: {ant_name} (index {antenna})")
+    LOGGER.info(f"Jones element: {jones}, part: {part}")
 
     # Extract: (N_freq, N_y, N_x)
     data = beam[pol_idx, antenna]
@@ -288,20 +285,20 @@ def mdv_to_xradio(npz_path: str, output: str,
     ds.attrs['jones_element'] = jones
     ds.attrs['component'] = part
 
-    # Write with chunking
-    encoding = {
-        output_var: {
-            'chunks': (1, chunks_freq, 1, chunks_x, chunks_y),
-        }
-    }
+    # Write with chunking and optional compression
+    enc = {'chunks': (1, chunks_freq, 1, chunks_x, chunks_y)}
+    if compress:
+        enc['compressor'] = ZARR_COMPRESSOR
+        enc['filters'] = ZARR_FILTERS
+    encoding = {output_var: enc}
     ds.to_zarr(output, mode='w', encoding=encoding)
     zarr.consolidate_metadata(output)
 
-    print(f"Written {output}")
-    print(f"  Shape: {data_5d.shape} (time, frequency, polarization, l, m)")
-    print(f"  Frequencies: {len(freqs)} channels, "
+    LOGGER.info(f"Written {output}")
+    LOGGER.info(f"  Shape: {data_5d.shape} (time, frequency, polarization, l, m)")
+    LOGGER.info(f"  Frequencies: {len(freqs)} channels, "
           f"{freqs[0]/1e6:.1f} to {freqs[-1]/1e6:.1f} MHz")
-    print(f"  Spatial: {len(margin_deg)}x{len(margin_deg)} pixels, "
+    LOGGER.info(f"  Spatial: {len(margin_deg)}x{len(margin_deg)} pixels, "
           f"{margin_deg[0]:.2f} to {margin_deg[-1]:.2f} deg")
 
     return output
