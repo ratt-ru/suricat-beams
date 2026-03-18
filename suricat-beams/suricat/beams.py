@@ -622,7 +622,7 @@ class BeamWizard(object):
             var_name: Name of the beam variable in the dataset.
             dim_names: Tuple of five dimension names for the output axes
                        (time, freq, ij, x, y).
-            ds: Optional existing xarray Dataset. If None, a new dataset is created.
+            ds: Optional existing xarray Dataset.
                 If provided, its coordinates are used as defaults for l, m, times,
                 freq; explicitly provided values are checked for consistency.
             l: 1D array of l coordinates in degrees. If None, uses ds coords or image grid.
@@ -647,8 +647,6 @@ class BeamWizard(object):
             compressor: Zarr compressor (e.g. numcodecs.Blosc). If None, uses zarr default.
             filters: List of zarr filters (e.g. [numcodecs.Delta]). If None, no filters.
 
-        Returns:
-            The xarray Dataset.
         """
         import os
         import zarr
