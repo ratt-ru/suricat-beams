@@ -243,7 +243,10 @@ def mdv_to_xradio(npz_path: str, output: str,
     pol_label = jones
 
     # Add singleton time dimension, value 0 (no time info in MdV beams)
-    # data shape: (freq, y, x) -> (1, freq, 1, y, x) = (time, freq, pol, l, m)
+    # data shape: (freq, y, x) -> transpose to (freq, x, y) so that
+    # l corresponds to the x-axis and m to the y-axis:
+    # (freq, x, y) -> (1, freq, 1, x, y) = (time, freq, pol, l, m)
+    data = data.transpose(0, 2, 1)
     data_5d = data[np.newaxis, :, np.newaxis, :, :]
 
     ds = xarray.Dataset({

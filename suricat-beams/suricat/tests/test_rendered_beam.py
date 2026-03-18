@@ -94,7 +94,11 @@ def test_rendered_vs_beamgain(bds_path: str, image_path: str,
     # Step 2: Extract rendered beam slice at the test pixel
     ds = xarray.open_zarr(output)
     # Dataset dimensions: (time, frequency, polarization, l, m)
-    rendered = ds[output_var].values[:, :, 0, l_index, m_index]  # (ntime, nfreq)
+    rendered = ds[output_var].isel(
+        polarization=0,
+        l=l_index,
+        m=m_index,
+    ).values  # (ntime, nfreq)
     zarr_times = Time(ds.coords['time'].values, format='mjd')
     zarr_freq = ds.coords['frequency'].values
     bw.log.info(f"Rendered slice shape: {rendered.shape} (ntime, nfreq)")

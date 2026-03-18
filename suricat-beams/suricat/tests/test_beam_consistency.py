@@ -253,7 +253,7 @@ def run_example_test(bds_path: str, image_path: str,
     srcpos = SkyCoord(ra=ra*u.deg, dec=dec*u.deg)
 
     # Run test
-    results = test_time_variable_vs_rotation_averaged(
+    results = time_variable_vs_rotation_averaged(
         bw, srcpos,
         time_stepping=time_stepping,
         freq=freq,
@@ -308,6 +308,12 @@ def test_beam_consistency_cli(bds_path, image_path, ra, dec,
     times = results['times']
     time_variable_beam = results['time_variable_values']
     frequencies = results['frequencies']
+
+    if plt is None:
+        raise click.ClickException(
+            "matplotlib is required for plotting but is not installed. "
+            "Please install it (e.g., 'pip install matplotlib') and retry."
+        )
 
     fig, ax = plt.subplots(figsize=(10, 6))
 
