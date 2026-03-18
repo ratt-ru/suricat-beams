@@ -160,7 +160,7 @@ cabs:
         dtype: str
         info: component to render (real, imag, abs, phase)
         default: real
-      var-name:
+      output-var:
         dtype: str
         info: data variable name
         default: SKY

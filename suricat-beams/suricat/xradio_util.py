@@ -6,7 +6,7 @@ Produces zarr datasets following the xradio image schema
 
     Dimensions:   (time, frequency, polarization, l, m)
     Coordinates:  time (MJD), frequency (Hz), polarization (str), l (rad), m (rad)
-    Data vars:    <var_name> (time, frequency, polarization, l, m) float32
+    Data vars:    <output_var> (time, frequency, polarization, l, m) float32
     Attributes:   direction (reference, latpole, lonpole, projection, pc)
 """
 import numpy as np
@@ -85,7 +85,7 @@ def bds_to_xradio(bds_path: str, image_path: str, output: str,
     return output
 
 
-def _enrich_bds_xradio(zarr_path: str, bw, var_name: str, polarizations: List[str]):
+def _enrich_bds_xradio(zarr_path: str, bw, output_var: str, polarizations: List[str]):
     """Post-process zarr store for xradio compatibility.
 
     - Converts l/m from degrees to radians
@@ -112,20 +112,20 @@ def _enrich_bds_xradio(zarr_path: str, bw, var_name: str, polarizations: List[st
     # Transpose data variable from (polarization, time, frequency, l, m)
     # to xradio order (time, frequency, polarization, l, m) lazily using dask
     # Existing array is chunked in (polarization, time, frequency, l, m)
-    dask_arr = da.from_zarr(zarr_path, component=var_name)
+    dask_arr = da.from_zarr(zarr_path, component=output_var)
     dask_arr = dask_arr.transpose(1, 2, 0, 3, 4)  # -> (time, frequency, polarization, l, m)
 
     # Read existing chunk info
-    old_chunks = store[var_name].chunks
+    old_chunks = store[output_var].chunks
     # old_chunks is (pol, time, freq, l, m) -> remap to (time, freq, pol, l, m)
     new_chunks = (old_chunks[1], old_chunks[2], old_chunks[0],
                   old_chunks[3], old_chunks[4])
 
     # Rechunk to desired order and write back to the same zarr store chunk-by-chunk
     dask_arr = dask_arr.rechunk(new_chunks)
-    dask_arr.to_zarr(zarr_path, component=var_name, overwrite=True)
+    dask_arr.to_zarr(zarr_path, component=output_var, overwrite=True)
 
-    store[var_name].attrs['_ARRAY_DIMENSIONS'] = [
+    store[output_var].attrs['_ARRAY_DIMENSIONS'] = [
         'time', 'frequency', 'polarization', 'l', 'm']
 
     # Dataset-level attributes: direction block matching reference schema
@@ -162,7 +162,7 @@ def _enrich_bds_xradio(zarr_path: str, bw, var_name: str, polarizations: List[st
     store.attrs.put(existing_attrs)
 
     # Variable-level attributes
-    store[var_name].attrs.update({
+    store[output_var].attrs.update({
         'image_type': 'primary_beam',
         'units': 'dimensionless',
     })
@@ -175,7 +175,7 @@ def mdv_to_xradio(npz_path: str, output: str,
                    antenna: int = -1,
                    jones: str = 'HH',
                    part: str = 'real',
-                   var_name: str = 'SKY',
+                   output_var: str = 'SKY',
                    chunks_freq: int = 64,
                    chunks_x: int = 128,
                    chunks_y: int = 128):
@@ -199,7 +199,7 @@ def mdv_to_xradio(npz_path: str, output: str,
         antenna: Antenna index (default -1 = array_average, the last entry)
         jones: Jones element to render ('HH', 'HV', 'VH', or 'VV')
         part: 'real', 'imag', 'abs', or 'phase'
-        var_name: Data variable name (default: SKY)
+        output_var: Data variable name (default: SKY)
         chunks_freq, chunks_x, chunks_y: Zarr chunk sizes
     """
     import xarray
@@ -247,7 +247,7 @@ def mdv_to_xradio(npz_path: str, output: str,
     data_5d = data[np.newaxis, :, np.newaxis, :, :]
 
     ds = xarray.Dataset({
-        var_name: xarray.DataArray(
+        output_var: xarray.DataArray(
             data_5d,
             dims=['time', 'frequency', 'polarization', 'l', 'm'],
             coords={
@@ -261,7 +261,7 @@ def mdv_to_xradio(npz_path: str, output: str,
     })
 
     # Attributes
-    ds[var_name].attrs.update({
+    ds[output_var].attrs.update({
         'image_type': f'jones_{jones}_{part}',
         'units': 'dimensionless',
     })
@@ -287,7 +287,7 @@ def mdv_to_xradio(npz_path: str, output: str,
 
     # Write with chunking
     encoding = {
-        var_name: {
+        output_var: {
             'chunks': (1, chunks_freq, 1, chunks_x, chunks_y),
         }
     }
