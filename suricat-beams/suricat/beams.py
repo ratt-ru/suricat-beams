@@ -771,7 +771,12 @@ class BeamWizard(object):
         }
 
         shape = tuple(dim_sizes[d] for d in dim_names)
-        chunks = tuple(dim_chunks[d] for d in dim_names)
+        # Clamp chunk sizes so they do not exceed the corresponding dimension lengths
+        clamped_dim_chunks = {
+            d: min(int(dim_chunks[d]), int(dim_sizes[d]))
+            for d in dim_names
+        }
+        chunks = tuple(clamped_dim_chunks[d] for d in dim_names)
         coords = {d: dim_coords[d] for d in dim_names}
 
         # Determine axis positions for ij and time dimensions in output layout

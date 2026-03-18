@@ -125,7 +125,7 @@ def test_rendered_vs_beamgain(bds_path: str, image_path: str,
     rendered_mean = rendered.mean(axis=0)
     beamgain_mean = beamgain.mean(axis=0)
     rel_diff = np.abs(rendered_mean - beamgain_mean) / (
-        (rendered_mean + beamgain_mean) / 2) * 100
+        (np.abs(rendered_mean) + np.abs(beamgain_mean)) / 2 + 1e-30) * 100
 
     # Also compare full time series
     full_rel_diff = np.abs(rendered - beamgain) / (

@@ -66,6 +66,16 @@ def bds_to_xradio(bds_path: str, image_path: str, output: str,
 
     stokes_ij = {"I": ("I", "I"), "Q": ("Q", "Q"),
                  "U": ("U", "U"), "V": ("V", "V")}
+
+    # Validate polarization labels to provide a clear error message for users
+    invalid_pols = [p for p in polarizations if p not in stokes_ij]
+    if invalid_pols:
+        allowed = sorted(stokes_ij.keys())
+        raise ValueError(
+            f"Unsupported polarization label(s): {invalid_pols}. "
+            f"Allowed values are: {allowed}."
+        )
+
     ij_list = [stokes_ij[p] for p in polarizations]
 
     bw.get_time_freq_beam(
@@ -286,7 +296,13 @@ def mdv_to_xradio(npz_path: str, output: str,
     ds.attrs['component'] = part
 
     # Write with chunking and optional compression
-    enc = {'chunks': (1, chunks_freq, 1, chunks_x, chunks_y)}
+    time_len, freq_len, pol_len, l_len, m_len = data_5d.shape
+    chunk_time = min(1, time_len)
+    chunk_freq = min(chunks_freq, freq_len)
+    chunk_pol = min(1, pol_len)
+    chunk_l = min(chunks_x, l_len)
+    chunk_m = min(chunks_y, m_len)
+    enc = {'chunks': (chunk_time, chunk_freq, chunk_pol, chunk_l, chunk_m)}
     if compress:
         enc['compressor'] = ZARR_COMPRESSOR
         enc['filters'] = ZARR_FILTERS
