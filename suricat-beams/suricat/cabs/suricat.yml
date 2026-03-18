@@ -55,10 +55,132 @@ cabs:
         policies:
           positional: true
     outputs:
-      bds: 
+      bds:
         dtype: Directory
-        metavar: BDS_FILE 
+        metavar: BDS_FILE
         info: output beam dataset (BDS) file
+        mkdir: false
+        policies:
+          positional: true
+
+  suricat.bds-to-xradio:
+    _use: lib.misc.suricat.cabs
+    command: suricat.xradio_util.bds_to_xradio
+    info: Renders a beam dataset (BDS) to an xradio-compatible zarr image
+    flavour: python
+    inputs:
+      bds-path:
+        dtype: Directory
+        metavar: BDS_PATH
+        info: input beam dataset (.bds.zarr)
+        required: true
+        policies:
+          positional: true
+      image-path:
+        dtype: Directory
+        metavar: IMAGE_PATH
+        info: image/dataset for WCS and time info
+        required: true
+        policies:
+          positional: true
+      output-var:
+        dtype: str
+        info: name of the output data variable
+        default: SKY
+      pixel-stepping:
+        dtype: int
+        info: compute every Nth pixel, interpolate back
+        default: 4
+      time-stepping:
+        dtype: int
+        info: use every Nth timeslot
+        default: 1
+      num-freq:
+        dtype: int
+        info: number of frequency channels (default uses beam dataset freqs)
+      ncpu:
+        dtype: int
+        info: number of CPUs (default auto)
+      chunks-time:
+        dtype: int
+        info: zarr chunk size along time axis
+        default: 1
+      chunks-freq:
+        dtype: int
+        info: zarr chunk size along frequency axis
+      chunks-x:
+        dtype: int
+        info: zarr chunk size along l axis
+        default: 256
+      chunks-y:
+        dtype: int
+        info: zarr chunk size along m axis
+        default: 256
+      polarizations:
+        dtype: List[str]
+        info: Stokes parameters to compute
+        default: [I]
+        policies:
+          repeat: repeat
+      beam-type:
+        dtype: str
+        info: beam variable to use (nstokes, stokes, njones, jones)
+        default: nstokes
+    outputs:
+      output:
+        dtype: Directory
+        metavar: OUTPUT
+        info: output xradio zarr dataset
+        mkdir: false
+        policies:
+          positional: true
+
+  suricat.mdv-to-xradio:
+    _use: lib.misc.suricat.cabs
+    command: suricat.xradio_util.mdv_to_xradio
+    info: Converts raw MdV beam npz to an xradio-compatible zarr image
+    flavour: python
+    inputs:
+      npz-path:
+        dtype: File
+        metavar: NPZ_PATH
+        info: input MdV beam npz file
+        required: true
+        policies:
+          positional: true
+      antenna:
+        dtype: int
+        info: antenna index (-1 = array_average)
+        default: -1
+      jones:
+        dtype: str
+        info: Jones element (HH, HV, VH, VV)
+        default: HH
+      part:
+        dtype: str
+        info: component to render (real, imag, abs, phase)
+        default: real
+      var-name:
+        dtype: str
+        info: data variable name
+        default: SKY
+      chunks-freq:
+        dtype: int
+        info: zarr chunk size along frequency axis
+        default: 64
+      chunks-x:
+        dtype: int
+        info: zarr chunk size along l axis
+        default: 128
+      chunks-y:
+        dtype: int
+        info: zarr chunk size along m axis
+        default: 128
+    outputs:
+      output:
+        dtype: Directory
+        metavar: OUTPUT
+        info: output xradio zarr dataset
         mkdir: false
         policies:
           positional: true
