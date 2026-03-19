@@ -53,7 +53,7 @@ def bds_to_xradio(bds_path: str, image_path: str, output: str,
         chunks_time, chunks_freq, chunks_x, chunks_y: Zarr chunk sizes
         elements: List of Jones or Mueller elements to render, e.g.
           "II", "QQ", "XX", "YY" etc.
-        output_pol: corrsponding list of output polarization labels for each element,
+        output_pol: corresponding list of output polarization labels for each element,
           default is chosen automatically
         beam_type: Beam variable ('nstokes', 'stokes', 'njones', 'jones')
         compress: Apply Delta+Blosc compression to zarr output (default: False)

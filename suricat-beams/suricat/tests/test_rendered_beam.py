@@ -88,7 +88,7 @@ def test_rendered_vs_beamgain(bds_path: str, image_path: str,
         ncpu=ncpu,
         chunks_time=chunks_time,
         chunks_freq=chunks_freq,
-        elements=[pol],
+        elements=[f"{pol}{pol}"],
         beam_type=beam_type)
 
     # Step 2: Extract rendered beam slice at the test pixel

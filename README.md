@@ -23,7 +23,7 @@ suricat bds2xradio beam.bds.zarr image.zarr output.zarr \
     --output-var SKY \
     --pixel-stepping 4 --time-stepping 4 \
     --num-freq 8 --chunks-time 1 --chunks-freq 1 \
-    --polarizations I --beam-type nstokes       # Render BDS to xradio zarr
+    --elements II --beam-type nstokes          # Render BDS to xradio zarr
 suricat mdv2xradio mdv-beams-L.npz output.zarr \
     --antenna -1 --jones HH --part real \
     --output-var SKY                            # Convert MdV npz to xradio zarr
