@@ -30,8 +30,9 @@ def bds_to_xradio(bds_path: str, image_path: str, output: str,
                   chunks_freq: Optional[int] = None,
                   chunks_x: int = 256,
                   chunks_y: int = 256,
-                  polarizations: Optional[List[str]] = None,
+                  elements: List[str] = [],
                   beam_type: str = 'nstokes',
+                  output_pol: List[str] = [],
                   compress: bool = False):
     """
     Render a beam dataset (BDS) to an xradio-compatible zarr image.
@@ -50,7 +51,10 @@ def bds_to_xradio(bds_path: str, image_path: str, output: str,
         num_freq: Number of frequency channels (None = use beam dataset freqs)
         ncpu: Number of CPUs (None = auto)
         chunks_time, chunks_freq, chunks_x, chunks_y: Zarr chunk sizes
-        polarizations: List of Stokes labels, e.g. ["I"] or ["I", "Q", "U", "V"]
+        elements: List of Jones or Mueller elements to render, e.g.
+          "II", "QQ", "XX", "YY" etc.
+        output_pol: corrsponding list of output polarization labels for each element,
+          default is chosen automatically
         beam_type: Beam variable ('nstokes', 'stokes', 'njones', 'jones')
         compress: Apply Delta+Blosc compression to zarr output (default: False)
 
@@ -61,22 +65,41 @@ def bds_to_xradio(bds_path: str, image_path: str, output: str,
 
     bw = BeamWizard(bds_path, image_path)
 
-    if polarizations is None:
-        polarizations = ["I"]
+    ij_list = []
+    output_pol_auto = []
+    _jones_map = {"X": 0, "Y": 1}
+    _output_pol = {"X": "I", "Y": "Q"}
 
-    stokes_ij = {"I": ("I", "I"), "Q": ("Q", "Q"),
-                 "U": ("U", "U"), "V": ("V", "V")}
-
-    # Validate polarization labels to provide a clear error message for users
-    invalid_pols = [p for p in polarizations if p not in stokes_ij]
-    if invalid_pols:
-        allowed = sorted(stokes_ij.keys())
-        raise ValueError(
-            f"Unsupported polarization label(s): {invalid_pols}. "
-            f"Allowed values are: {allowed}."
-        )
-
-    ij_list = [stokes_ij[p] for p in polarizations]
+    if beam_type in ['nstokes', 'stokes']:
+        if not elements:
+            elements = ["II"]
+        for e in elements:
+            if len(e) != 2 or \
+                e[0] not in "IQUV" or \
+                e[1] not in "IQUV":
+                raise ValueError(f"Invalid Stokes matrix element '{e}'")
+            ij_list.append(tuple(e))
+            output_pol_auto.append(e[1])
+    elif beam_type in ['njones', 'jones']:
+        if not elements:
+            elements = ["XX"]
+        for e in elements:
+            if len(e) != 2 or \
+                e[0] not in "XY" or \
+                e[1] not in "XY":
+                raise ValueError(f"Invalid Jones matrix element '{e}'")
+            ij_list.append(tuple([_jones_map[e1] for e1 in e]))
+            output_pol_auto.append(_output_pol[e[1]])
+    else:
+        raise ValueError(f"Unknown beam_type '{beam_type}', expected "
+                         f"'nstokes', 'stokes', 'njones', or 'jones'")
+    if not output_pol:
+        output_pol = output_pol_auto
+    elif len(output_pol) != len(output_pol_auto):
+        raise ValueError("Length of output_pol must match length of elements")
+    
+    bw.log.info(f"Rendering {beam_type} elements {elements} using pol labels {output_pol}")
+    bw.log.info(f"Using ij_list: {ij_list}")
 
     bw.get_time_freq_beam(
         filename=output,
@@ -97,7 +120,7 @@ def bds_to_xradio(bds_path: str, image_path: str, output: str,
         compressor=ZARR_COMPRESSOR if compress else None,
         filters=ZARR_FILTERS if compress else None)
 
-    _enrich_bds_xradio(output, bw, output_var, polarizations)
+    _enrich_bds_xradio(output, bw, output_var, output_pol)
 
     bw.log.info(f"xradio-compatible {output_var} written to {output}")
     return output

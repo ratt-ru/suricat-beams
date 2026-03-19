@@ -75,7 +75,7 @@ def download_mdv_beams(source: str, dest: Optional[str] = None,
 def _download_mdv_beams(*args, **kw):
     return download_mdv_beams(*args, **kw)
 
-def mdv_beams_to_bds(mdv_beams: str, bds: str):
+def mdv_beams_to_bds(mdv_beams: str, bds: str, compress: bool = False):
     """
     Converts MdV's npz beamset into a Stokes I power beam
     """
@@ -149,18 +149,28 @@ def mdv_beams_to_bds(mdv_beams: str, bds: str):
 
     LOGGER.info(f"saving output dataset {bds}")
     # write to dataset
-    jcoords = dict(i=[0,1], j=[0,1], X=degs, Y=degs, FREQ=freqs)
-    scoords = dict(i=list("IQUV"), j=list("IQUV"), X=degs, Y=degs, FREQ=freqs)
+    # Jones and Stokes have different matrix sizes (2x2 vs 4x4), so use
+    # separate dimension names to avoid xarray coordinate conflicts
+    jcoords = dict(receptor_i=[0,1], receptor_j=[0,1], X=degs, Y=degs, FREQ=freqs)
+    scoords = dict(stokes_i=list("IQUV"), stokes_j=list("IQUV"), X=degs, Y=degs, FREQ=freqs)
 
     xds = xarray.Dataset(dict(
-        jones = xarray.DataArray(jj, dims=("i", "j", "FREQ", "Y", "X"), coords=jcoords),
-        njones = xarray.DataArray(jnorm, dims=["i", "j", "FREQ", "Y", "X"], coords=jcoords),
-        stokes = xarray.DataArray(st, dims=["i", "j", "FREQ", "Y", "X"], coords=scoords),
-        nstokes = xarray.DataArray(stnorm, dims=["i", "j", "FREQ", "Y", "X"], coords=scoords),
+        jones = xarray.DataArray(jj, dims=("receptor_i", "receptor_j", "FREQ", "Y", "X"), coords=jcoords),
+        njones = xarray.DataArray(jnorm, dims=["receptor_i", "receptor_j", "FREQ", "Y", "X"], coords=jcoords),
+        stokes = xarray.DataArray(st, dims=["stokes_i", "stokes_j", "FREQ", "Y", "X"], coords=scoords),
+        nstokes = xarray.DataArray(stnorm, dims=["stokes_i", "stokes_j", "FREQ", "Y", "X"], coords=scoords),
     ))
     xds.attrs["fits_header"] = hdr
     xds.attrs.update(x0=i0, y0=i0, dx=delta, dy=delta, freqs=freqs)
-    xds.to_zarr(bds, mode="w")
+
+    encoding = {}
+    if compress:
+        from numcodecs import Delta, Blosc
+        compressor = Blosc(cname='zstd', clevel=5, shuffle=Blosc.BITSHUFFLE)
+        filters = [Delta(dtype='float32')]
+        for var in ['jones', 'njones', 'stokes', 'nstokes']:
+            encoding[var] = dict(compressor=compressor, filters=filters)
+    xds.to_zarr(bds, mode="w", encoding=encoding)
 
 @cli.command("mdv2bds", help=schemas.cabs.get("suricat.mdv-beams-to-bds").info)
 @clickify_parameters(schemas.cabs.get("suricat.mdv-beams-to-bds"))
@@ -231,7 +241,10 @@ class BeamWizard(object):
         key = var, i ,j
         if key not in self._prefilters:
             self.log.debug(f"computing spline prefilter for {var}[{i},{j}]")
-            self._prefilters[key] = spline_filter(self.bds[var].sel(i=i, j=j))
+            da = self.bds[var]
+            # Use the variable's actual first two dims (receptor_i/j or stokes_i/j)
+            sel = {da.dims[0]: i, da.dims[1]: j}
+            self._prefilters[key] = spline_filter(da.sel(**sel))
         return self._prefilters[key]
 
     def get_source_coordinates(self, srcpos: SkyCoord, 
@@ -500,56 +513,56 @@ class BeamWizard(object):
         beam_sum_sq = np.zeros(out_shape)
 
         # Process in spatial chunks to limit memory
-        for chunk_idx in range(n_chunks):
-            chunk_start = chunk_idx * chunk_size
-            chunk_end = min(chunk_start + chunk_size, n_pixels)
-            self.log.info(f"processing chunk {chunk_idx + 1}/{n_chunks} "
-                          f"(pixels {chunk_start}-{chunk_end})")
-            ll_chunk = ll_flat[chunk_start:chunk_end]
-            mm_chunk = mm_flat[chunk_start:chunk_end]
+        with ThreadPoolExecutor(max_workers=ncpu) as executor:
+            for chunk_idx in range(n_chunks):
+                chunk_start = chunk_idx * chunk_size
+                chunk_end = min(chunk_start + chunk_size, n_pixels)
+                self.log.info(f"processing chunk {chunk_idx + 1}/{n_chunks} "
+                              f"(pixels {chunk_start}-{chunk_end})")
+                ll_chunk = ll_flat[chunk_start:chunk_end]
+                mm_chunk = mm_flat[chunk_start:chunk_end]
 
-            def process_time(t_idx):
-                # Convert l/m (RA/Dec frame: l=East, m=North) to beam coordinates.
-                # PA = position angle from field centre to NCP in AltAz frame.
-                # Empirically: AltAz_angle = PA - ICRS_angle, so expanding:
-                #   x_beam = sin(PA - alpha) = m*sin(PA) - l*cos(PA)
-                #   y_beam = cos(PA - alpha) = l*sin(PA) + m*cos(PA)
-                # (Note: "right" in the AltAz beam = West = negative l, per astronomical convention)
-                pa_t = pa[t_idx].rad
-                l_rot = mm_chunk * np.sin(pa_t) - ll_chunk * np.cos(pa_t)
-                m_rot = ll_chunk * np.sin(pa_t) + mm_chunk * np.cos(pa_t)
+                def process_time(t_idx):
+                    # Convert l/m (RA/Dec frame: l=East, m=North) to beam coordinates.
+                    # PA = position angle from field centre to NCP in AltAz frame.
+                    # Empirically: AltAz_angle = PA - ICRS_angle, so expanding:
+                    #   x_beam = sin(PA - alpha) = m*sin(PA) - l*cos(PA)
+                    #   y_beam = cos(PA - alpha) = l*sin(PA) + m*cos(PA)
+                    # (Note: "right" in the AltAz beam = West = negative l, per astronomical convention)
+                    pa_t = pa[t_idx].rad
+                    l_rot = mm_chunk * np.sin(pa_t) - ll_chunk * np.cos(pa_t)
+                    m_rot = ll_chunk * np.sin(pa_t) + mm_chunk * np.cos(pa_t)
 
-                # Convert to beam pixel coordinates
-                xp = l_rot / self.bds.attrs['dx'] + self.bds.attrs['x0']
-                yp = m_rot / self.bds.attrs['dy'] + self.bds.attrs['y0']
+                    # Convert to beam pixel coordinates
+                    xp = l_rot / self.bds.attrs['dx'] + self.bds.attrs['x0']
+                    yp = m_rot / self.bds.attrs['dy'] + self.bds.attrs['y0']
 
-                # Interpolate beam at these coordinates
-                # Note: interpolate_beam expects [X, Y] format (uses xpyp[0] as X, xpyp[1] as Y)
-                xpyp = np.array([xp, yp])
-                beam_vals = self.interpolate_beam(xpyp, freq, var=var, i=i, j=j)
+                    # Interpolate beam at these coordinates
+                    # Note: interpolate_beam expects [X, Y] format (uses xpyp[0] as X, xpyp[1] as Y)
+                    xpyp = np.array([xp, yp])
+                    beam_vals = self.interpolate_beam(xpyp, freq, var=var, i=i, j=j)
 
-                # Average over frequency if spectral index is given
-                if spi is not None:
-                    beam_vals = (beam_vals * norm_weights[:, np.newaxis]).sum(axis=0)
+                    # Average over frequency if spectral index is given
+                    if spi is not None:
+                        beam_vals = (beam_vals * norm_weights[:, np.newaxis]).sum(axis=0)
 
-                return beam_vals
+                    return beam_vals
 
-            # Accumulate over time for this chunk
-            chunk_sum = np.zeros((chunk_end - chunk_start,) if spi is not None else (len(freq), chunk_end - chunk_start))
-            chunk_sum_sq = np.zeros_like(chunk_sum)
+                # Accumulate over time for this chunk
+                chunk_sum = np.zeros((chunk_end - chunk_start,) if spi is not None else (len(freq), chunk_end - chunk_start))
+                chunk_sum_sq = np.zeros_like(chunk_sum)
 
-            with ThreadPoolExecutor(max_workers=ncpu) as executor:
                 for beam_vals in executor.map(process_time, range(n_times)):
                     chunk_sum += beam_vals
                     chunk_sum_sq += beam_vals ** 2
 
-            # Store chunk results
-            if spi is not None:
-                beam_sum[chunk_start:chunk_end] = chunk_sum
-                beam_sum_sq[chunk_start:chunk_end] = chunk_sum_sq
-            else:
-                beam_sum[:, chunk_start:chunk_end] = chunk_sum
-                beam_sum_sq[:, chunk_start:chunk_end] = chunk_sum_sq
+                # Store chunk results
+                if spi is not None:
+                    beam_sum[chunk_start:chunk_end] = chunk_sum
+                    beam_sum_sq[chunk_start:chunk_end] = chunk_sum_sq
+                else:
+                    beam_sum[:, chunk_start:chunk_end] = chunk_sum
+                    beam_sum_sq[:, chunk_start:chunk_end] = chunk_sum_sq
 
         # Compute mean and variance over time
         beam_mean = beam_sum / n_times

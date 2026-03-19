@@ -54,6 +54,10 @@ cabs:
         required: true
         policies:
           positional: true
+      compress:
+        dtype: bool
+        info: apply Delta+Blosc compression to zarr output
+        default: false
     outputs:
       bds:
         dtype: Directory
@@ -116,10 +120,14 @@ cabs:
         dtype: int
         info: zarr chunk size along m axis
         default: 256
-      polarizations:
+      elements:
         dtype: List[str]
-        info: Stokes parameters to compute
-        default: [I]
+        info: "Jones/Mueller elements to render (e.g. II, QQ for Stokes; XX, YY for Jones)"
+        policies:
+          repeat: repeat
+      output-pol:
+        dtype: List[str]
+        info: "output polarization labels for each element (default: auto)"
         policies:
           repeat: repeat
       beam-type:
