@@ -137,7 +137,7 @@ def mdv_beams_to_bds(mdv_beams: str, bds: str, compress: bool = False):
         # LOGGER.info(f"J={jones[0, i0, i0]}")
         # LOGGER.info(f"JH={np.conj(jones).transpose((0,1,2,4,3))[0, i0, i0]}")
         mshape = list(jones.shape[:-2]) + [4, 4]
-        mueller = np.einsum('fyxij,fyxkl->fyxikjl', jones, np.conj(jones).transpose((0,1,2,4,3))).reshape(mshape)
+        mueller = np.einsum('fyxij,fyxkl->fyxikjl', jones, np.conj(jones)).reshape(mshape)
         # LOGGER.info(f"M={mueller[0, i0, i0]}")
         return Sinv @ mueller @ S              
 
@@ -672,7 +672,7 @@ class BeamWizard(object):
         if ij_list is None:
             ij_list = [("I", "I")]
         if ncpu is None:
-            ncpu = os.cpu_count() // 2 or 1
+            ncpu = max(1, (os.cpu_count() or 1) // 2)
 
         # Resolve parameters from ds or defaults
         if ds is not None:
@@ -695,10 +695,11 @@ class BeamWizard(object):
                 times = Time(ds.coords[dim_time].values, format='mjd')
         else:
             if times is None:
-                if self.times is None:
+                available_times = getattr(self, "times", None)
+                if available_times is None:
                     raise RuntimeError("times must be supplied, since BeamWizard was "
                                        "constructed without observational time info")
-                times = self.times
+                times = available_times
             if l is None:
                 l = self.l_grid
             if m is None:
