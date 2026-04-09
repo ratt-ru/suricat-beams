@@ -16,6 +16,7 @@ def cli(verbose=False):
 schemas = OmegaConf.load(os.path.join(os.path.dirname(__file__), "cabs/suricat.yml"))
 
 from . import beams
+from . import xradio_util
 
 if __name__ == "__main__":
     cli()
