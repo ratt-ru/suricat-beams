@@ -6,7 +6,7 @@ metadata:
   # registry to use. Use module::filename.yml::variable format to pull from a config file inside a python module
   REGISTRY: quay.io/osmirnov
   # image bundle version. Use module::filename.yml::variable format to pull from a config file inside a python module
-  BUNDLE_VERSION: sc0.2.1
+  BUNDLE_VERSION: sc0.2.2
   # prefix to be removed from image version when comparing to python package version
   BUNDLE_VERSION_PREFIX: sc
   # path to images. Use module::filename to refer to content of module
@@ -37,8 +37,8 @@ images:
     versions:
       '0.1.2':
         package: suricat-beams==0.1.2
-      '0.2.1':
-        package: suricat-beams==0.2.1
+      '0.2.2':
+        package: suricat-beams==0.2.2
       master:
         package: git+https://github.com/ratt-ru/suricat-beams.git
 
