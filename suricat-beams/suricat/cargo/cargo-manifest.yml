@@ -32,6 +32,8 @@ images:
   suricat:
     assign:
       dockerfile: Dockerfile.generic.pip
+    # "most latest" image is the one towards the bottom, this will be the default 
+    # one as tagged by the BUNDLE_VERSION suffix
     versions:
       '0.1.2':
         package: suricat-beams==0.1.2
