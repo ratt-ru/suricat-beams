@@ -26,10 +26,13 @@ suricat-init:
 
     mdv-beams: 
       info: path to MdV-style beam model, will be downloaded
+      dtype: File
       default: '{current.dir-out}/mdv-beams-{current.band}.npz'
+      must_exist: false
 
     bds:
       info: path to beam dataset file computed from MdV model
+      dtype: Directory
       default: '{current.dir-out}/beam-{current.band}.bds.zarr'
 
   steps:
