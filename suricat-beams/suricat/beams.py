@@ -386,6 +386,7 @@ class BeamWizard(object):
                                    pixel_stepping: int = 4,
                                    chunk_size: int = 1024**2,
                                    reference_lm: Optional[Tuple[float, float]] = None,
+                                   reference_series: Optional[np.ndarray] = None,
                                    var: str = 'nstokes', i: str = "I", j: str = "I") -> Union[
                                        Tuple[np.ndarray, np.ndarray],
                                        Tuple[np.ndarray, np.ndarray, np.ndarray, dict]]:
@@ -423,6 +424,14 @@ class BeamWizard(object):
                           the reference track is accumulated and returned. Use this to
                           model calibration transfer: Var[E(x)/E_ref] ≈
                           relvar(x) + relvar_ref − 2·cov(x)/(mean(x)·mean_ref).
+            reference_series: Alternative to reference_lm: an explicit reference gain
+                          track as a 1D array aligned with the *supplied* times (before
+                          time_stepping is applied; it is subsampled identically). Use
+                          this to feed an empirically extracted calibration-reference
+                          track (e.g. from flat-source fitting) instead of a model
+                          position. Only the relative scale matters for the returned
+                          relative statistics: a fractional track δ(t) may be passed
+                          as 1+δ(t). Mutually exclusive with reference_lm.
             var: Beam variable to interpolate ('nstokes', 'stokes', 'njones', 'jones')
             i, j: Stokes or Jones indices (e.g., "I", "Q", 0, 1)
 
@@ -455,8 +464,18 @@ class BeamWizard(object):
                     "constructed without observational time info"
                 )
             times = available_times
+        if not (reference_lm is None or reference_series is None):
+            raise ValueError("reference_lm and reference_series are mutually exclusive")
+        if reference_series is not None:
+            reference_series = np.asarray(reference_series, float).ravel()
+            if len(reference_series) != len(times):
+                raise ValueError(f"reference_series length {len(reference_series)} does not "
+                                 f"match number of times {len(times)}")
         if time_stepping > 1:
             times = times[::time_stepping]
+            if reference_series is not None:
+                reference_series = reference_series[::time_stepping]
+        have_reference = reference_lm is not None or reference_series is not None
 
         freq, norm_weights = self._resolve_freqs(freq, num_freq, spi)
 
@@ -552,20 +571,28 @@ class BeamWizard(object):
         beam_sum = np.zeros(out_shape)
         beam_sum_sq = np.zeros(out_shape)
 
-        # Reference beam track: single-pixel time series at reference_lm, used to
-        # accumulate the covariance of every pixel's track against the reference track
-        if reference_lm is not None:
-            l_ref = np.atleast_1d(float(reference_lm[0]))
-            m_ref = np.atleast_1d(float(reference_lm[1]))
-            # shape (n_times,) in spi mode, else (n_times, nfreq)
-            e_ref = np.array([beam_at(l_ref, m_ref, t).ravel() if spi is not None
-                              else beam_at(l_ref, m_ref, t)[:, 0]
-                              for t in range(n_times)])
-            if spi is not None:
-                e_ref = e_ref.ravel()
+        # Reference beam track: single-pixel time series at reference_lm (computed from
+        # the beam model), or an explicit externally supplied series. Used to accumulate
+        # the covariance of every pixel's track against the reference track.
+        if have_reference:
+            if reference_series is None:
+                l_ref = np.atleast_1d(float(reference_lm[0]))
+                m_ref = np.atleast_1d(float(reference_lm[1]))
+                # shape (n_times,) in spi mode, else (n_times, nfreq)
+                e_ref = np.array([beam_at(l_ref, m_ref, t).ravel() if spi is not None
+                                  else beam_at(l_ref, m_ref, t)[:, 0]
+                                  for t in range(n_times)])
+                if spi is not None:
+                    e_ref = e_ref.ravel()
+                self.log.info(f"reference track at l,m=({reference_lm[0]:.4f},{reference_lm[1]:.4f}) deg: "
+                              f"mean {e_ref.mean():.4f}, std {e_ref.std():.4f}")
+            else:
+                # externally supplied series: broadcast across frequency in per-freq mode
+                e_ref = reference_series if spi is not None else \
+                        np.repeat(reference_series[:, np.newaxis], len(freq), axis=1)
+                self.log.info(f"external reference series: mean {reference_series.mean():.4f}, "
+                              f"std {reference_series.std():.4f}")
             beam_sum_ref = np.zeros(out_shape)
-            self.log.info(f"reference track at l,m=({reference_lm[0]:.4f},{reference_lm[1]:.4f}) deg: "
-                          f"mean {e_ref.mean():.4f}, std {e_ref.std():.4f}")
 
         # Process in spatial chunks to limit memory
         with ThreadPoolExecutor(max_workers=ncpu) as executor:
@@ -583,12 +610,12 @@ class BeamWizard(object):
                 # Accumulate over time for this chunk
                 chunk_sum = np.zeros((chunk_end - chunk_start,) if spi is not None else (len(freq), chunk_end - chunk_start))
                 chunk_sum_sq = np.zeros_like(chunk_sum)
-                chunk_sum_ref = np.zeros_like(chunk_sum) if reference_lm is not None else None
+                chunk_sum_ref = np.zeros_like(chunk_sum) if have_reference else None
 
                 for t_idx, beam_vals in enumerate(executor.map(process_time, range(n_times))):
                     chunk_sum += beam_vals
                     chunk_sum_sq += beam_vals ** 2
-                    if reference_lm is not None:
+                    if have_reference:
                         # broadcast the reference value over pixels: scalar in spi mode,
                         # else a per-frequency column
                         eref_t = e_ref[t_idx] if spi is not None else e_ref[t_idx][:, np.newaxis]
@@ -598,18 +625,18 @@ class BeamWizard(object):
                 if spi is not None:
                     beam_sum[chunk_start:chunk_end] = chunk_sum
                     beam_sum_sq[chunk_start:chunk_end] = chunk_sum_sq
-                    if reference_lm is not None:
+                    if have_reference:
                         beam_sum_ref[chunk_start:chunk_end] = chunk_sum_ref
                 else:
                     beam_sum[:, chunk_start:chunk_end] = chunk_sum
                     beam_sum_sq[:, chunk_start:chunk_end] = chunk_sum_sq
-                    if reference_lm is not None:
+                    if have_reference:
                         beam_sum_ref[:, chunk_start:chunk_end] = chunk_sum_ref
 
         # Compute mean and variance over time
         beam_mean = beam_sum / n_times
         beam_var = beam_sum_sq / n_times - beam_mean ** 2
-        if reference_lm is not None:
+        if have_reference:
             e_ref_mean = e_ref.mean(axis=0)   # scalar in spi mode, else (nfreq,)
             e_ref_var = e_ref.var(axis=0)
             eref_bcast = e_ref_mean if spi is not None else np.asarray(e_ref_mean)[:, np.newaxis]
@@ -619,12 +646,12 @@ class BeamWizard(object):
         if spi is not None or len(freq) == 1:
             beam_mean = beam_mean.reshape(shape)
             beam_var = beam_var.reshape(shape)
-            if reference_lm is not None:
+            if have_reference:
                 beam_cov = beam_cov.reshape(shape)
         else:
             beam_mean = beam_mean.reshape((len(freq),) + shape)
             beam_var = beam_var.reshape((len(freq),) + shape)
-            if reference_lm is not None:
+            if have_reference:
                 beam_cov = beam_cov.reshape((len(freq),) + shape)
 
         # Interpolate back to full resolution if pixel_stepping was applied
@@ -638,26 +665,27 @@ class BeamWizard(object):
             if beam_mean.ndim == 2:
                 beam_mean = map_coordinates(beam_mean, coords, order=1, mode='nearest').reshape(full_shape)
                 beam_var  = map_coordinates(beam_var,  coords, order=1, mode='nearest').reshape(full_shape)
-                if reference_lm is not None:
+                if have_reference:
                     beam_cov = map_coordinates(beam_cov, coords, order=1, mode='nearest').reshape(full_shape)
             else:
                 mean_full = np.empty((len(freq),) + full_shape)
                 var_full  = np.empty((len(freq),) + full_shape)
-                cov_full  = np.empty((len(freq),) + full_shape) if reference_lm is not None else None
+                cov_full  = np.empty((len(freq),) + full_shape) if have_reference else None
                 for f_idx in range(len(freq)):
                     mean_full[f_idx] = map_coordinates(beam_mean[f_idx], coords, order=1, mode='nearest').reshape(full_shape)
                     var_full[f_idx]  = map_coordinates(beam_var[f_idx],  coords, order=1, mode='nearest').reshape(full_shape)
-                    if reference_lm is not None:
+                    if have_reference:
                         cov_full[f_idx] = map_coordinates(beam_cov[f_idx], coords, order=1, mode='nearest').reshape(full_shape)
                 beam_mean = mean_full
                 beam_var  = var_full
-                if reference_lm is not None:
+                if have_reference:
                     beam_cov = cov_full
 
-        if reference_lm is None:
+        if not have_reference:
             return beam_mean, beam_var
         reference_stats = dict(series=e_ref, mean=e_ref_mean, var=e_ref_var,
-                               lm=(float(reference_lm[0]), float(reference_lm[1])))
+                               lm=None if reference_lm is None else
+                                  (float(reference_lm[0]), float(reference_lm[1])))
         return beam_mean, beam_var, beam_cov, reference_stats
 
 
