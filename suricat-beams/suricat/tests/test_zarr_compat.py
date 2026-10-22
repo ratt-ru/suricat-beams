@@ -198,3 +198,16 @@ def test_mdv_to_xradio(mdv_npz, tmp_path):
     assert ds.SKY.dims == ("time", "frequency", "polarization", "l", "m")
     assert ds.SKY.shape == (1, 3, 1, 21, 21)
     np.testing.assert_allclose(ds.SKY.values[0, :, 0, 10, 10], 1, atol=1e-6)
+
+
+def test_beam_gains_from_a_header(bds, fits_image, times):
+    from suricat.beamplots import collect_beam_gain_to_source
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+    coord = SkyCoord(201.6 * u.deg, -43.1 * u.deg)
+    by_image = collect_beam_gain_to_source(bds, fits_image, coord, freq=[1.0e9, 1.2e9], time=times[1])
+    by_header = collect_beam_gain_to_source(bds, None, coord, freq=[1.0e9, 1.2e9], time=times[1],
+                                            header=_image_header())
+    assert by_image.keys() == by_header.keys()
+    for name in by_image:
+        np.testing.assert_array_equal(by_image[name], by_header[name])
