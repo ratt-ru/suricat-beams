@@ -18,6 +18,7 @@ from pathlib import Path
 
 from scabha.schema_utils import clickify_parameters
 from .main import cli, schemas
+from .zarr_compat import BEAM_COMPRESSOR, BEAM_FILTERS, create_array, is_zarr_store, variable_encoding
 
 @dataclass
 class PowerBeam(object):
@@ -165,11 +166,11 @@ def mdv_beams_to_bds(mdv_beams: str, bds: str, compress: bool = False):
 
     encoding = {}
     if compress:
-        from numcodecs import Delta, Blosc
-        compressor = Blosc(cname='zstd', clevel=5, shuffle=Blosc.BITSHUFFLE)
-        filters = [Delta(dtype='float32')]
+        # the float32 Delta filter only suits the real-valued Stokes beams: on the
+        # complex Jones beams it would difference interleaved real/imaginary parts
         for var in ['jones', 'njones', 'stokes', 'nstokes']:
-            encoding[var] = dict(compressor=compressor, filters=filters)
+            filters = BEAM_FILTERS if xds[var].dtype.kind == 'f' else None
+            encoding[var] = variable_encoding(BEAM_COMPRESSOR, filters)
     xds.to_zarr(bds, mode="w", encoding=encoding)
 
 @cli.command("mdv2bds", help=schemas.cabs.get("suricat.mdv-beams-to-bds").info)
@@ -190,7 +191,20 @@ class BeamWizard(object):
     ra0: float    # field centre in degrees
     dec0: float
 
-    def __init__(self, bds_name: str, image_name: str):
+    def __init__(self, bds_name: str, image_name: Optional[str] = None,
+                 header: Optional[Union[fits.Header, dict]] = None,
+                 times: Optional[Time] = None):
+        """
+        Args:
+            bds_name: beam dataset (BDS) made by mdv_beams_to_bds.
+            image_name: a FITS image, or a zarr image dataset (either zarr format)
+                carrying a ``fits_header`` attribute and a ``TIME`` coordinate in MJD
+                seconds, to take the WCS and observation times from.
+            header: instead of image_name, the image's FITS header. It needs the
+                celestial axes as axes 1 and 2, with NAXIS1/2, CRPIX1/2 and CDELT1/2.
+            times: observation times, given with header (or to override those of
+                image_name). Without them, methods that need times must be passed them.
+        """
         from . import log
         self.log = log
         log.info(f"opening BDS {bds_name}")
@@ -199,21 +213,31 @@ class BeamWizard(object):
         log.info(f"frequency range is {freqs[0]*1e-6:.0f} to {freqs[-1]*1e-6:.0f} MHz")
         self.index_to_freq = scipy.interpolate.interp1d(np.arange(len(freqs)), freqs)
         self.freq_to_index = scipy.interpolate.interp1d(freqs, np.arange(len(freqs)))
-                 
-        if image_name.endswith(".fits"):
+
+        self.times = None
+        if (header is None) == (image_name is None):
+            raise ValueError("specify exactly one of image_name and header")
+        if header is not None:
+            log.info("obtaining WCS from the supplied header")
+            fitshdr = fits.Header(header)
+        elif image_name.endswith(".fits"):
             log.info(f"obtaining WCS from FITS image {image_name}")
             fitshdr = fits.open(image_name)[0].header
-            self.wcs = WCS(fitshdr)
-            self.time = None
-        elif (Path(image_name) / ".zgroup").exists():
+        elif is_zarr_store(image_name):
             log.info(f"obtaining WCS from dataset {image_name}")
             ds = xarray.open_zarr(image_name)
+            if 'fits_header' not in ds.attrs:
+                raise RuntimeError(f"dataset {image_name} has no fits_header attribute: "
+                                   "pass its header and times to BeamWizard instead")
             fitshdr = fits.Header(dict(ds.attrs['fits_header']))
-            self.wcs = WCS(fitshdr)
             self.times = Time(ds.coords['TIME'].values/(24*3600), format='mjd')
-            log.info(f"time axis is {self.times[0].iso} to {self.times[-1].iso}")
         else:
             raise RuntimeError(f"unable to determine type of image {image_name}")
+        if times is not None:
+            self.times = times
+        if self.times is not None:
+            log.info(f"time axis is {self.times[0].iso} to {self.times[-1].iso}")
+        self.wcs = WCS(fitshdr)
         # drop WCS axes >2
         while len(self.wcs.axis_type_names) > 2:
             log.debug(f"dropping WCS axis {self.wcs.axis_type_names[-1]}")
@@ -657,8 +681,10 @@ class BeamWizard(object):
             var: Beam variable to interpolate ('nstokes', 'stokes', 'njones', 'jones').
             ij_list: List of (i, j) tuples specifying which matrix elements to compute.
                      Default is [("I", "I")].
-            compressor: Zarr compressor (e.g. numcodecs.Blosc). If None, uses zarr default.
-            filters: List of zarr filters (e.g. [numcodecs.Delta]). If None, no filters.
+            compressor: numcodecs compressor (e.g. numcodecs.Blosc), converted to its v3
+                        equivalent under zarr-python 3. If None, uses zarr default.
+            filters: List of numcodecs filters (e.g. [numcodecs.Delta]), converted likewise.
+                     If None, no filters.
 
         """
         import os
@@ -797,16 +823,13 @@ class BeamWizard(object):
 
         # Create zarr store directly (no dask dependency)
         if ds is None:
-            store = zarr.open(filename, mode='w')
-            store.create_dataset(var_name, shape=shape, chunks=chunks,
-                                 dtype='float32', fill_value=0,
-                                 compressor=compressor, filters=filters)
-            store[var_name].attrs['_ARRAY_DIMENSIONS'] = list(dim_names)
+            store = zarr.open_group(filename, mode='w')
+            create_array(store, var_name, dim_names, shape=shape, chunks=chunks,
+                         dtype='float32', fill_value=0,
+                         compressor=compressor, filters=filters)
             # Write coordinate arrays
-            for dim_idx, dim in enumerate(dim_names):
-                coord_data = np.asarray(coords[dim])
-                store.create_dataset(dim, data=coord_data, overwrite=True)
-                store[dim].attrs['_ARRAY_DIMENSIONS'] = [dim]
+            for dim in dim_names:
+                create_array(store, dim, [dim], data=coords[dim])
             zarr.consolidate_metadata(filename)
 
         def compute_plane(pa_t, ii, jj):
@@ -840,7 +863,7 @@ class BeamWizard(object):
 
             done_count = 0
             total = n_times * n_ij
-            zarr_arr = zarr.open(filename, mode='r+')[var_name]
+            zarr_arr = zarr.open_group(filename, mode='r+')[var_name]
             for fut in as_completed(futures):
                 ij_idx, t_idx = futures[fut]
                 plane = fut.result()  # shape: (n_freq, nx, ny)
