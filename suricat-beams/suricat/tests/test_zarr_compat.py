@@ -133,6 +133,15 @@ def test_header_accepts_a_plain_dict(bds, times):
     assert bw.wcs.wcs.ctype[0] == "RA---SIN"
 
 
+def test_a_single_time_is_an_axis_of_one(bds):
+    t = Time(60000.75, format="mjd")
+    bw = BeamWizard(bds, header=_image_header(), times=t)
+    assert bw.times.shape == (1,) and bw.times[0] == t
+    coord = bw.wcs.pixel_to_world(*(n // 2 for n in bw.wcs.pixel_shape))
+    gains = bw.get_time_variable_beamgain(coord)
+    assert gains.shape[-1] == 1  # (frequency, time)
+
+
 def test_missing_times_raise_a_clear_error(bds, fits_image):
     bw = BeamWizard(bds, fits_image)
     with pytest.raises(RuntimeError, match="explicit times"):

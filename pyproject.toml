@@ -8,9 +8,15 @@ readme = "README.md"
 packages = [{include = "suricat", from = "suricat-beams"}]
 
 [tool.poetry.dependencies]
-python = "^3.8"
+python = "^3.9"  # zarr 2.18 needs 3.9; zarr 3 (any version) needs 3.11
 stimela = "^2.0"
 xarray-fits = "*"
+# xarray before 2025.6.1 cannot write through current zarr-python 3 (and zarr 3 only
+# installs on Python >= 3.11); on older Pythons zarr stays at 2, which any xarray handles
+xarray = [
+    {version = "*", python = "<3.11"},
+    {version = ">=2025.6.1", python = ">=3.11"},
+]
 zarr = ">=2.18"
 numcodecs = "*"
 astro-tigger-lsm = "*"

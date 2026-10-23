@@ -234,7 +234,8 @@ class BeamWizard(object):
         else:
             raise RuntimeError(f"unable to determine type of image {image_name}")
         if times is not None:
-            self.times = times
+            # a single observation time is still a time axis, of length one
+            self.times = times.reshape((1,)) if times.isscalar else times
         if self.times is not None:
             log.info(f"time axis is {self.times[0].iso} to {self.times[-1].iso}")
         self.wcs = WCS(fitshdr)
