@@ -308,7 +308,9 @@ class BeamWizard(object):
         fx = np.meshgrid(freq, xpyp[0], indexing='ij')   # mesh freq,x
         fy = np.meshgrid(freq, xpyp[1], indexing='ij')   # mesh freq,y 
         coords = np.vstack([fy] + [fx[1:]])  # mesh freq,yx
-        return map_coordinates(self._get_prefilter(var, i, j), coords, prefilter=True)
+        # the spline coefficients are already computed (by _get_prefilter): filtering
+        # them again would sharpen the beam, overshooting the data at every grid node
+        return map_coordinates(self._get_prefilter(var, i, j), coords, prefilter=False)
 
     def _resolve_freqs(self,
                         freq: Optional[np.ndarray] = None,
