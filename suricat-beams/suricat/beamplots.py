@@ -5,11 +5,14 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 from astropy.units import Quantity
 
-def collect_beam_gain_to_source(bds_name, image_name, coord: Union[SkyCoord, str], 
+def collect_beam_gain_to_source(bds_name, image_name, coord: Union[SkyCoord, str],
                                 freq: Union[float, str, List[float], List[str]],
-                                time: Optional[Union[str, Time]] = None):
+                                time: Optional[Union[str, Time]] = None,
+                                header=None):
+    """Beam gains towards ``coord``. The image's WCS comes from ``image_name``, or from
+    ``header`` (a FITS header) when image_name is None: see BeamWizard."""
     from . import log
-    bw = BeamWizard(bds_name, image_name)
+    bw = BeamWizard(bds_name, image_name, header=header)
     if type(coord) is str:
         coord = SkyCoord(coord)
     log.info(f"computing beam gain towards {coord}")

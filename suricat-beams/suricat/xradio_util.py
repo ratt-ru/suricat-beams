@@ -11,13 +11,12 @@ Produces zarr datasets following the xradio image schema
 """
 import numpy as np
 from typing import Optional, List
-from numcodecs import Delta, Blosc
 from scabha.schema_utils import clickify_parameters
 from .main import cli, schemas
+from .zarr_compat import BEAM_COMPRESSOR, BEAM_FILTERS, create_array, variable_encoding
 
-# Smooth beam data compresses well with Delta prefiltering + Blosc
-ZARR_COMPRESSOR = Blosc(cname='zstd', clevel=5, shuffle=Blosc.BITSHUFFLE)
-ZARR_FILTERS = [Delta(dtype='float32')]
+ZARR_COMPRESSOR = BEAM_COMPRESSOR
+ZARR_FILTERS = BEAM_FILTERS
 
 
 def bds_to_xradio(bds_path: str, image_path: str, output: str,
@@ -136,7 +135,7 @@ def _enrich_bds_xradio(zarr_path: str, bw, output_var: str, polarizations: List[
     """
     import zarr
 
-    store = zarr.open(zarr_path, mode='r+')
+    store = zarr.open_group(zarr_path, mode='r+')
 
     # Convert l/m from degrees to radians (xradio convention)
     l_deg = store['l'][:]
@@ -146,14 +145,10 @@ def _enrich_bds_xradio(zarr_path: str, bw, output_var: str, polarizations: List[
 
     # Fix polarization labels: get_time_freq_beam writes "II", "QQ", etc.
     # xradio expects single-letter Stokes labels "I", "Q", "U", "V"
-    pol_arr = store.create_dataset(
-        'polarization', data=np.array(polarizations), overwrite=True)
-    pol_arr.attrs['_ARRAY_DIMENSIONS'] = ['polarization']
+    create_array(store, 'polarization', ['polarization'], data=np.array(polarizations))
 
-    # Dimensions are already in xradio order (time, frequency, polarization, l, m)
-    # from get_time_freq_beam, just ensure attrs are set correctly
-    store[output_var].attrs['_ARRAY_DIMENSIONS'] = [
-        'time', 'frequency', 'polarization', 'l', 'm']
+    # Dimensions are already in xradio order (time, frequency, polarization, l, m):
+    # get_time_freq_beam was given them as dim_names
 
     # Dataset-level attributes: direction block matching reference schema
     ra0 = float(bw.centre.ra.rad)
@@ -186,7 +181,7 @@ def _enrich_bds_xradio(zarr_path: str, bw, output_var: str, polarizations: List[
             '_value': [[1.0, 0.0], [0.0, 1.0]],
         },
     }
-    store.attrs.put(existing_attrs)
+    store.attrs.update(existing_attrs)
 
     # Variable-level attributes
     store[output_var].attrs.update({
@@ -327,8 +322,7 @@ def mdv_to_xradio(npz_path: str, output: str,
     chunk_m = min(chunks_y, m_len)
     enc = {'chunks': (chunk_time, chunk_freq, chunk_pol, chunk_l, chunk_m)}
     if compress:
-        enc['compressor'] = ZARR_COMPRESSOR
-        enc['filters'] = ZARR_FILTERS
+        enc.update(variable_encoding(ZARR_COMPRESSOR, ZARR_FILTERS))
     encoding = {output_var: enc}
     ds.to_zarr(output, mode='w', encoding=encoding)
     zarr.consolidate_metadata(output)
