@@ -412,9 +412,9 @@ class BeamWizard(object):
                                    time_stepping: int = 4,
                                    pixel_stepping: int = 4,
                                    chunk_size: int = 1024**2,
+                                   var: str = 'nstokes', i: str = "I", j: str = "I", *,
                                    reference_lm: Optional[Tuple[float, float]] = None,
-                                   reference_series: Optional[np.ndarray] = None,
-                                   var: str = 'nstokes', i: str = "I", j: str = "I") -> Union[
+                                   reference_series: Optional[np.ndarray] = None) -> Union[
                                        Tuple[np.ndarray, np.ndarray],
                                        Tuple[np.ndarray, np.ndarray, np.ndarray, dict]]:
         """
@@ -444,13 +444,18 @@ class BeamWizard(object):
                             large images; use 1 to disable.
             chunk_size: Number of spatial pixels to process at once (default 1024²).
                         Controls memory usage for large grids.
+            var: Beam variable to interpolate ('nstokes', 'stokes', 'njones', 'jones')
+            i, j: Stokes or Jones indices (e.g., "I", "Q", 0, 1)
             reference_lm: Optional (l, m) position in degrees (east/north offset from
                           centre) of a calibration-reference direction. If given, the
                           beam track E_ref(t) at this position is computed over the same
                           times, and the time covariance of every pixel's track against
                           the reference track is accumulated and returned. Use this to
-                          model calibration transfer: Var[E(x)/E_ref] ≈
-                          relvar(x) + relvar_ref − 2·cov(x)/(mean(x)·mean_ref).
+                          model calibration transfer: to first order, the relative
+                          variance of the ratio,
+                          Var[E(x)/E_ref] / (mean(x)/mean_ref)² ≈
+                          relvar(x) + relvar_ref − 2·cov(x)/(mean(x)·mean_ref),
+                          where relvar is variance/mean². Keyword only.
             reference_series: Alternative to reference_lm: an explicit reference gain
                           track as a 1D array aligned with the *supplied* times (before
                           time_stepping is applied; it is subsampled identically). Use
@@ -458,12 +463,11 @@ class BeamWizard(object):
                           track (e.g. from flat-source fitting) instead of a model
                           position. Only the relative scale matters for the returned
                           relative statistics: a fractional track δ(t) may be passed
-                          as 1+δ(t). Mutually exclusive with reference_lm.
-            var: Beam variable to interpolate ('nstokes', 'stokes', 'njones', 'jones')
-            i, j: Stokes or Jones indices (e.g., "I", "Q", 0, 1)
+                          as 1+δ(t). Mutually exclusive with reference_lm. Keyword only.
 
         Returns:
-            If reference_lm is None (default), tuple of (mean_beam, variance_beam);
+            Without a reference (neither reference_lm nor reference_series; the default),
+            tuple of (mean_beam, variance_beam);
             otherwise tuple of (mean_beam, variance_beam, covariance_beam, reference_stats),
             where covariance_beam is the per-pixel time covariance against the reference
             track, and reference_stats is a dict with keys 'series' (the E_ref(t) track,

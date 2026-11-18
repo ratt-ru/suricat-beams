@@ -106,3 +106,13 @@ def test_reference_arguments_are_checked(wizard):
         _beam(wizard, reference_lm=REF_LM, reference_series=np.ones(NTIMES))
     with pytest.raises(ValueError, match="does not match"):
         _beam(wizard, reference_series=np.ones(NTIMES - 1))
+
+
+def test_the_reference_arguments_are_keyword_only():
+    """Existing positional calls (..., var, i, j) must bind exactly as before the reference arrived."""
+    import inspect
+    params = inspect.signature(BeamWizard.get_rotation_averaged_beam).parameters
+    names = list(params)
+    assert names[names.index("var"):names.index("var") + 3] == ["var", "i", "j"]
+    for name in ("reference_lm", "reference_series"):
+        assert params[name].kind is inspect.Parameter.KEYWORD_ONLY
