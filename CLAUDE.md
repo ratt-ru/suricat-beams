@@ -59,3 +59,18 @@ stimela run suricat-beams/suricat/recipes/init.yml suricat-init band=U
 - **xarray + zarr**: Beam dataset storage format
 - **astropy**: Coordinate transforms, WCS handling, time/location
 - **scipy**: Spline interpolation for beam values
+
+## Releasing
+
+A version number lives in **six places in four files**, and a release must bump all of them
+together (as 0.3.0 did in 8445c2c and 0.4.0 in its release commit):
+
+| File | What |
+| ---- | ---- |
+| `pyproject.toml` | `version = "X.Y.Z"`: the `suricat-beams` library |
+| `suricat-beams/pyproject.toml` | `version = "X.Y.Z"`: the `suricat-beams-cabs` package |
+| `suricat-beams/suricat/cabs/suricat.yml` | `version: scX.Y.Z`: the image the cabs run |
+| `suricat-beams/suricat/cargo/cargo-manifest.yml` | `BUNDLE_VERSION: scX.Y.Z` |
+| same | the image entry under `images.suricat.versions`: `'X.Y.Z':` with `package: suricat-beams==X.Y.Z` (the previous release's entry is replaced, not added to) |
+
+`git grep -n "<old version>"` after the bump should find nothing.
