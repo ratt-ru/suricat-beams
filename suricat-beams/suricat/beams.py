@@ -412,7 +412,11 @@ class BeamWizard(object):
                                    time_stepping: int = 4,
                                    pixel_stepping: int = 4,
                                    chunk_size: int = 1024**2,
-                                   var: str = 'nstokes', i: str = "I", j: str = "I") -> Tuple[np.ndarray, np.ndarray]:
+                                   var: str = 'nstokes', i: str = "I", j: str = "I", *,
+                                   reference_lm: Optional[Tuple[float, float]] = None,
+                                   reference_series: Optional[np.ndarray] = None) -> Union[
+                                       Tuple[np.ndarray, np.ndarray],
+                                       Tuple[np.ndarray, np.ndarray, np.ndarray, dict]]:
         """
         Compute the rotation-averaged beam at specified l/m coordinates.
 
@@ -442,17 +446,45 @@ class BeamWizard(object):
                         Controls memory usage for large grids.
             var: Beam variable to interpolate ('nstokes', 'stokes', 'njones', 'jones')
             i, j: Stokes or Jones indices (e.g., "I", "Q", 0, 1)
+            reference_lm: Optional (l, m) position in degrees (east/north offset from
+                          centre) of a calibration-reference direction. If given, the
+                          beam track E_ref(t) at this position is computed over the same
+                          times, and the time covariance of every pixel's track against
+                          the reference track is accumulated and returned. Use this to
+                          model calibration transfer: to first order, the relative
+                          variance of the ratio,
+                          Var[E(x)/E_ref] / (mean(x)/mean_ref)² ≈
+                          relvar(x) + relvar_ref − 2·cov(x)/(mean(x)·mean_ref),
+                          where relvar is variance/mean². Keyword only.
+            reference_series: Alternative to reference_lm: an explicit reference gain
+                          track as a 1D array aligned with the *supplied* times (before
+                          time_stepping is applied; it is subsampled identically). Use
+                          this to feed an empirically extracted calibration-reference
+                          track (e.g. from flat-source fitting) instead of a model
+                          position. Its overall scale cancels in the relative statistics
+                          derived from these outputs (relvar, cov/(mean·mean_ref)), so a
+                          fractional track δ(t) may be passed as 1+δ(t). It must be
+                          finite. Mutually exclusive with reference_lm. Keyword only.
 
         Returns:
-            Tuple of (mean_beam, variance_beam) as np.ndarray:
-                - If spi is None and len(freq) > 1: both arrays have shape (NFREQ, NL, NM)
-                - If spi is not None or len(freq) == 1: both arrays have shape (NL, NM)
+            Without a reference (neither reference_lm nor reference_series; the default),
+            tuple of (mean_beam, variance_beam);
+            otherwise tuple of (mean_beam, variance_beam, covariance_beam, reference_stats),
+            where covariance_beam is the per-pixel time covariance against the reference
+            track, and reference_stats is a dict with keys 'series' (the E_ref(t) track,
+            shape (NTIMES,) or (NTIMES, NFREQ)), 'mean', 'var', and 'lm'.
+            Array shapes:
+                - If spi is None and len(freq) > 1: (NFREQ, NL, NM)
+                - If spi is not None or len(freq) == 1: (NL, NM)
                 Where NL and NM are the dimensions of the l/m grid, corresponding to
                 the lengths of the l and m axes respectively (matching indexing='ij').
 
         Raises:
             RuntimeError: If times are not available and not provided.
-            ValueError: If both freq and num_freq are specified.
+            ValueError: If both freq and num_freq are specified; if both reference_lm and
+                reference_series are given; if reference_series does not match the times,
+                holds non-finite values or is not positive on average; or if reference_lm
+                leaves the beam cube during the sweep, or the beam there is not positive.
         """
         import os
         from concurrent.futures import ThreadPoolExecutor
@@ -467,8 +499,24 @@ class BeamWizard(object):
                     "constructed without observational time info"
                 )
             times = available_times
+        if not (reference_lm is None or reference_series is None):
+            raise ValueError("reference_lm and reference_series are mutually exclusive")
+        if reference_series is not None:
+            reference_series = np.asarray(reference_series, float).ravel()
+            if len(reference_series) != len(times):
+                raise ValueError(f"reference_series length {len(reference_series)} does not "
+                                 f"match number of times {len(times)}")
+            # one NaN (a flagged sample, say) would make every pixel's covariance NaN
+            if not np.all(np.isfinite(reference_series)):
+                raise ValueError("reference_series holds non-finite values: fill or interpolate "
+                                 "over flagged samples before passing it")
+            if reference_series.mean() <= 0:
+                raise ValueError("reference_series must be a gain track, positive on average")
         if time_stepping > 1:
             times = times[::time_stepping]
+            if reference_series is not None:
+                reference_series = reference_series[::time_stepping]
+        have_reference = reference_lm is not None or reference_series is not None
 
         freq, norm_weights = self._resolve_freqs(freq, num_freq, spi)
 
@@ -534,10 +582,74 @@ class BeamWizard(object):
         # Precompute the spline filter to ensure it's cached before threading
         self._get_prefilter(var, i, j)
 
+        def beam_coords(ll_arr, mm_arr, t_idx):
+            # Convert l/m (RA/Dec frame: l=East, m=North) to beam coordinates.
+            # PA = position angle from field centre to NCP in AltAz frame.
+            # Empirically: AltAz_angle = PA - ICRS_angle, so expanding:
+            #   x_beam = sin(PA - alpha) = m*sin(PA) - l*cos(PA)
+            #   y_beam = cos(PA - alpha) = l*sin(PA) + m*cos(PA)
+            # (Note: "right" in the AltAz beam = West = negative l, per astronomical convention)
+            pa_t = pa[t_idx].rad
+            l_rot = mm_arr * np.sin(pa_t) - ll_arr * np.cos(pa_t)
+            m_rot = ll_arr * np.sin(pa_t) + mm_arr * np.cos(pa_t)
+
+            # Convert to beam pixel coordinates
+            xp = l_rot / self.bds.attrs['dx'] + self.bds.attrs['x0']
+            yp = m_rot / self.bds.attrs['dy'] + self.bds.attrs['y0']
+            return xp, yp
+
+        def beam_at(ll_arr, mm_arr, t_idx):
+            xp, yp = beam_coords(ll_arr, mm_arr, t_idx)
+            # Interpolate beam at these coordinates
+            # Note: interpolate_beam expects [X, Y] format (uses xpyp[0] as X, xpyp[1] as Y)
+            beam_vals = self.interpolate_beam(np.array([xp, yp]), freq, var=var, i=i, j=j)
+
+            # Average over frequency if spectral index is given
+            if spi is not None:
+                beam_vals = (beam_vals * norm_weights[:, np.newaxis]).sum(axis=0)
+
+            return beam_vals
+
         # Allocate output arrays
         out_shape = (n_pixels,) if spi is not None else (len(freq), n_pixels)
         beam_sum = np.zeros(out_shape)
         beam_sum_sq = np.zeros(out_shape)
+
+        # Reference beam track: single-pixel time series at reference_lm (computed from
+        # the beam model), or an explicit externally supplied series. Used to accumulate
+        # the covariance of every pixel's track against the reference track.
+        if have_reference:
+            if reference_series is None:
+                l_ref = np.atleast_1d(float(reference_lm[0]))
+                m_ref = np.atleast_1d(float(reference_lm[1]))
+                # Outside the beam cube the interpolation returns 0, so a reference off the cube
+                # would give a zero track and a zero covariance everywhere, without complaint.
+                # It must stay inside for the whole parallactic-angle sweep.
+                ny_beam, nx_beam = self._get_prefilter(var, i, j).shape[-2:]
+                ref_xy = np.array([np.ravel(beam_coords(l_ref, m_ref, t)) for t in range(n_times)])
+                outside = ((ref_xy[:, 0] < 0) | (ref_xy[:, 0] > nx_beam - 1) |
+                           (ref_xy[:, 1] < 0) | (ref_xy[:, 1] > ny_beam - 1))
+                if outside.any():
+                    raise ValueError(f"reference_lm {tuple(reference_lm)} lies outside the beam cube "
+                                     f"at {int(outside.sum())} of {n_times} times")
+                # shape (n_times,) in spi mode, else (n_times, nfreq)
+                e_ref = np.array([beam_at(l_ref, m_ref, t).ravel() if spi is not None
+                                  else beam_at(l_ref, m_ref, t)[:, 0]
+                                  for t in range(n_times)])
+                if spi is not None:
+                    e_ref = e_ref.ravel()
+                if not np.all(np.isfinite(e_ref)) or np.any(np.mean(e_ref, axis=0) <= 0):
+                    raise ValueError(f"the beam at reference_lm {tuple(reference_lm)} is not finite "
+                                     f"or not positive on average: no usable reference track")
+                self.log.info(f"reference track at l,m=({reference_lm[0]:.4f},{reference_lm[1]:.4f}) deg: "
+                              f"mean {e_ref.mean():.4f}, std {e_ref.std():.4f}")
+            else:
+                # externally supplied series: broadcast across frequency in per-freq mode
+                e_ref = reference_series if spi is not None else \
+                        np.repeat(reference_series[:, np.newaxis], len(freq), axis=1)
+                self.log.info(f"external reference series: mean {reference_series.mean():.4f}, "
+                              f"std {reference_series.std():.4f}")
+            beam_sum_ref = np.zeros(out_shape)
 
         # Process in spatial chunks to limit memory
         with ThreadPoolExecutor(max_workers=ncpu) as executor:
@@ -550,58 +662,54 @@ class BeamWizard(object):
                 mm_chunk = mm_flat[chunk_start:chunk_end]
 
                 def process_time(t_idx):
-                    # Convert l/m (RA/Dec frame: l=East, m=North) to beam coordinates.
-                    # PA = position angle from field centre to NCP in AltAz frame.
-                    # Empirically: AltAz_angle = PA - ICRS_angle, so expanding:
-                    #   x_beam = sin(PA - alpha) = m*sin(PA) - l*cos(PA)
-                    #   y_beam = cos(PA - alpha) = l*sin(PA) + m*cos(PA)
-                    # (Note: "right" in the AltAz beam = West = negative l, per astronomical convention)
-                    pa_t = pa[t_idx].rad
-                    l_rot = mm_chunk * np.sin(pa_t) - ll_chunk * np.cos(pa_t)
-                    m_rot = ll_chunk * np.sin(pa_t) + mm_chunk * np.cos(pa_t)
-
-                    # Convert to beam pixel coordinates
-                    xp = l_rot / self.bds.attrs['dx'] + self.bds.attrs['x0']
-                    yp = m_rot / self.bds.attrs['dy'] + self.bds.attrs['y0']
-
-                    # Interpolate beam at these coordinates
-                    # Note: interpolate_beam expects [X, Y] format (uses xpyp[0] as X, xpyp[1] as Y)
-                    xpyp = np.array([xp, yp])
-                    beam_vals = self.interpolate_beam(xpyp, freq, var=var, i=i, j=j)
-
-                    # Average over frequency if spectral index is given
-                    if spi is not None:
-                        beam_vals = (beam_vals * norm_weights[:, np.newaxis]).sum(axis=0)
-
-                    return beam_vals
+                    return beam_at(ll_chunk, mm_chunk, t_idx)
 
                 # Accumulate over time for this chunk
                 chunk_sum = np.zeros((chunk_end - chunk_start,) if spi is not None else (len(freq), chunk_end - chunk_start))
                 chunk_sum_sq = np.zeros_like(chunk_sum)
+                chunk_sum_ref = np.zeros_like(chunk_sum) if have_reference else None
 
-                for beam_vals in executor.map(process_time, range(n_times)):
+                for t_idx, beam_vals in enumerate(executor.map(process_time, range(n_times))):
                     chunk_sum += beam_vals
                     chunk_sum_sq += beam_vals ** 2
+                    if have_reference:
+                        # broadcast the reference value over pixels: scalar in spi mode,
+                        # else a per-frequency column
+                        eref_t = e_ref[t_idx] if spi is not None else e_ref[t_idx][:, np.newaxis]
+                        chunk_sum_ref += beam_vals * eref_t
 
                 # Store chunk results
                 if spi is not None:
                     beam_sum[chunk_start:chunk_end] = chunk_sum
                     beam_sum_sq[chunk_start:chunk_end] = chunk_sum_sq
+                    if have_reference:
+                        beam_sum_ref[chunk_start:chunk_end] = chunk_sum_ref
                 else:
                     beam_sum[:, chunk_start:chunk_end] = chunk_sum
                     beam_sum_sq[:, chunk_start:chunk_end] = chunk_sum_sq
+                    if have_reference:
+                        beam_sum_ref[:, chunk_start:chunk_end] = chunk_sum_ref
 
         # Compute mean and variance over time
         beam_mean = beam_sum / n_times
         beam_var = beam_sum_sq / n_times - beam_mean ** 2
+        if have_reference:
+            e_ref_mean = e_ref.mean(axis=0)   # scalar in spi mode, else (nfreq,)
+            e_ref_var = e_ref.var(axis=0)
+            eref_bcast = e_ref_mean if spi is not None else np.asarray(e_ref_mean)[:, np.newaxis]
+            beam_cov = beam_sum_ref / n_times - beam_mean * eref_bcast
 
         # Reshape to coarse grid
         if spi is not None or len(freq) == 1:
             beam_mean = beam_mean.reshape(shape)
             beam_var = beam_var.reshape(shape)
+            if have_reference:
+                beam_cov = beam_cov.reshape(shape)
         else:
             beam_mean = beam_mean.reshape((len(freq),) + shape)
             beam_var = beam_var.reshape((len(freq),) + shape)
+            if have_reference:
+                beam_cov = beam_cov.reshape((len(freq),) + shape)
 
         # Interpolate back to full resolution if pixel_stepping was applied
         if pixel_stepping > 1 and shape != full_shape:
@@ -614,16 +722,28 @@ class BeamWizard(object):
             if beam_mean.ndim == 2:
                 beam_mean = map_coordinates(beam_mean, coords, order=1, mode='nearest').reshape(full_shape)
                 beam_var  = map_coordinates(beam_var,  coords, order=1, mode='nearest').reshape(full_shape)
+                if have_reference:
+                    beam_cov = map_coordinates(beam_cov, coords, order=1, mode='nearest').reshape(full_shape)
             else:
                 mean_full = np.empty((len(freq),) + full_shape)
                 var_full  = np.empty((len(freq),) + full_shape)
+                cov_full  = np.empty((len(freq),) + full_shape) if have_reference else None
                 for f_idx in range(len(freq)):
                     mean_full[f_idx] = map_coordinates(beam_mean[f_idx], coords, order=1, mode='nearest').reshape(full_shape)
                     var_full[f_idx]  = map_coordinates(beam_var[f_idx],  coords, order=1, mode='nearest').reshape(full_shape)
+                    if have_reference:
+                        cov_full[f_idx] = map_coordinates(beam_cov[f_idx], coords, order=1, mode='nearest').reshape(full_shape)
                 beam_mean = mean_full
                 beam_var  = var_full
+                if have_reference:
+                    beam_cov = cov_full
 
-        return beam_mean, beam_var
+        if not have_reference:
+            return beam_mean, beam_var
+        reference_stats = dict(series=e_ref, mean=e_ref_mean, var=e_ref_var,
+                               lm=None if reference_lm is None else
+                                  (float(reference_lm[0]), float(reference_lm[1])))
+        return beam_mean, beam_var, beam_cov, reference_stats
 
 
     def get_time_freq_beam(self,
