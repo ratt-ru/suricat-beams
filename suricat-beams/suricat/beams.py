@@ -461,9 +461,10 @@ class BeamWizard(object):
                           time_stepping is applied; it is subsampled identically). Use
                           this to feed an empirically extracted calibration-reference
                           track (e.g. from flat-source fitting) instead of a model
-                          position. Only the relative scale matters for the returned
-                          relative statistics: a fractional track δ(t) may be passed
-                          as 1+δ(t). Mutually exclusive with reference_lm. Keyword only.
+                          position. Its overall scale cancels in the relative statistics
+                          derived from these outputs (relvar, cov/(mean·mean_ref)), so a
+                          fractional track δ(t) may be passed as 1+δ(t). It must be
+                          finite. Mutually exclusive with reference_lm. Keyword only.
 
         Returns:
             Without a reference (neither reference_lm nor reference_series; the default),
@@ -480,7 +481,10 @@ class BeamWizard(object):
 
         Raises:
             RuntimeError: If times are not available and not provided.
-            ValueError: If both freq and num_freq are specified.
+            ValueError: If both freq and num_freq are specified; if both reference_lm and
+                reference_series are given; if reference_series does not match the times,
+                holds non-finite values or is not positive on average; or if reference_lm
+                leaves the beam cube during the sweep, or the beam there is not positive.
         """
         import os
         from concurrent.futures import ThreadPoolExecutor
@@ -502,6 +506,12 @@ class BeamWizard(object):
             if len(reference_series) != len(times):
                 raise ValueError(f"reference_series length {len(reference_series)} does not "
                                  f"match number of times {len(times)}")
+            # one NaN (a flagged sample, say) would make every pixel's covariance NaN
+            if not np.all(np.isfinite(reference_series)):
+                raise ValueError("reference_series holds non-finite values: fill or interpolate "
+                                 "over flagged samples before passing it")
+            if reference_series.mean() <= 0:
+                raise ValueError("reference_series must be a gain track, positive on average")
         if time_stepping > 1:
             times = times[::time_stepping]
             if reference_series is not None:
@@ -572,7 +582,7 @@ class BeamWizard(object):
         # Precompute the spline filter to ensure it's cached before threading
         self._get_prefilter(var, i, j)
 
-        def beam_at(ll_arr, mm_arr, t_idx):
+        def beam_coords(ll_arr, mm_arr, t_idx):
             # Convert l/m (RA/Dec frame: l=East, m=North) to beam coordinates.
             # PA = position angle from field centre to NCP in AltAz frame.
             # Empirically: AltAz_angle = PA - ICRS_angle, so expanding:
@@ -586,7 +596,10 @@ class BeamWizard(object):
             # Convert to beam pixel coordinates
             xp = l_rot / self.bds.attrs['dx'] + self.bds.attrs['x0']
             yp = m_rot / self.bds.attrs['dy'] + self.bds.attrs['y0']
+            return xp, yp
 
+        def beam_at(ll_arr, mm_arr, t_idx):
+            xp, yp = beam_coords(ll_arr, mm_arr, t_idx)
             # Interpolate beam at these coordinates
             # Note: interpolate_beam expects [X, Y] format (uses xpyp[0] as X, xpyp[1] as Y)
             beam_vals = self.interpolate_beam(np.array([xp, yp]), freq, var=var, i=i, j=j)
@@ -609,12 +622,25 @@ class BeamWizard(object):
             if reference_series is None:
                 l_ref = np.atleast_1d(float(reference_lm[0]))
                 m_ref = np.atleast_1d(float(reference_lm[1]))
+                # Outside the beam cube the interpolation returns 0, so a reference off the cube
+                # would give a zero track and a zero covariance everywhere, without complaint.
+                # It must stay inside for the whole parallactic-angle sweep.
+                ny_beam, nx_beam = self._get_prefilter(var, i, j).shape[-2:]
+                ref_xy = np.array([np.ravel(beam_coords(l_ref, m_ref, t)) for t in range(n_times)])
+                outside = ((ref_xy[:, 0] < 0) | (ref_xy[:, 0] > nx_beam - 1) |
+                           (ref_xy[:, 1] < 0) | (ref_xy[:, 1] > ny_beam - 1))
+                if outside.any():
+                    raise ValueError(f"reference_lm {tuple(reference_lm)} lies outside the beam cube "
+                                     f"at {int(outside.sum())} of {n_times} times")
                 # shape (n_times,) in spi mode, else (n_times, nfreq)
                 e_ref = np.array([beam_at(l_ref, m_ref, t).ravel() if spi is not None
                                   else beam_at(l_ref, m_ref, t)[:, 0]
                                   for t in range(n_times)])
                 if spi is not None:
                     e_ref = e_ref.ravel()
+                if not np.all(np.isfinite(e_ref)) or np.any(np.mean(e_ref, axis=0) <= 0):
+                    raise ValueError(f"the beam at reference_lm {tuple(reference_lm)} is not finite "
+                                     f"or not positive on average: no usable reference track")
                 self.log.info(f"reference track at l,m=({reference_lm[0]:.4f},{reference_lm[1]:.4f}) deg: "
                               f"mean {e_ref.mean():.4f}, std {e_ref.std():.4f}")
             else:
