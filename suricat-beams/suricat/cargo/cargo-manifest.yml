@@ -39,9 +39,8 @@ images:
         package: suricat-beams==0.1.2
       '0.3.0':
         package: suricat-beams==0.3.0
-      master:
-        package: git+https://github.com/ratt-ru/suricat-beams.git
-      # the release last: the bottom entry is the default image
       '0.4.0':
         package: suricat-beams==0.4.0
+      master:
+        package: git+https://github.com/ratt-ru/suricat-beams.git
 

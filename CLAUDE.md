@@ -71,7 +71,7 @@ together (as 0.3.0 did in 8445c2c and 0.4.0 in its release commit):
 | `suricat-beams/pyproject.toml` | `version = "X.Y.Z"`: the `suricat-beams-cabs` package |
 | `suricat-beams/suricat/cabs/suricat.yml` | `version: scX.Y.Z`: the image the cabs run |
 | `suricat-beams/suricat/cargo/cargo-manifest.yml` | `BUNDLE_VERSION: scX.Y.Z` |
-| same | a new image entry under `images.suricat.versions`: `'X.Y.Z':` with `package: suricat-beams==X.Y.Z`, added as the **last** entry (below `master`), since the bottom entry is the default image. Earlier releases' entries stay, so their images remain available |
+| same | a new image entry under `images.suricat.versions`: `'X.Y.Z':` with `package: suricat-beams==X.Y.Z`, added after the earlier releases' entries and above `master`, which stays the bottom entry. Earlier releases' entries stay, so their images remain available |
 
 After the bump, `git grep -n "<old version>"` should find only the old release's own image entry.
 
