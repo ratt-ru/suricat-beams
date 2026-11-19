@@ -69,7 +69,7 @@ together (as 0.3.0 did in 8445c2c and 0.4.0 in its release commit):
 | ---- | ---- |
 | `pyproject.toml` | `version = "X.Y.Z"`: the `suricat-beams` library |
 | `suricat-beams/pyproject.toml` | `version = "X.Y.Z"`: the `suricat-beams-cabs` package |
-| `suricat-beams/suricat/cabs/suricat.yml` | `version: scX.Y.Z`: the image the cabs run |
+| `suricat-beams/suricat/cabs/suricat.yml` | `version: scX.Y.Z`: the image the cabs run. On master this is `master-scX.Y.Z` (the image built from master); the release commit sets the release image `scX.Y.Z`, so the published cabs run the release, and the next commit on master sets it back to `master-scX.Y.Z` with the new version |
 | `suricat-beams/suricat/cargo/cargo-manifest.yml` | `BUNDLE_VERSION: scX.Y.Z` |
 | same | a new image entry under `images.suricat.versions`: `'X.Y.Z':` with `package: suricat-beams==X.Y.Z`, added after the earlier releases' entries and above `master`, which stays the bottom entry. Earlier releases' entries stay, so their images remain available |
 
